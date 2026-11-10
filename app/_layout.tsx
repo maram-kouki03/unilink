@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Stack, router, useSegments } from 'expo-router';
+import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -24,13 +24,14 @@ const queryClient = new QueryClient({
 function AuthGate() {
   const { session, loading } = useAuth();
   const segments = useSegments();
+  const router = useRouter();
 
   useEffect(() => {
     if (loading) return;
     const inAuth = segments[0] === '(auth)';
     if (!session && !inAuth) router.replace('/welcome');
     else if (session && inAuth) router.replace('/');
-  }, [session, loading, segments]);
+  }, [session, loading, segments, router]);
 
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg }, animation: 'slide_from_right' }}>

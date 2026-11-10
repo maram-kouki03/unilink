@@ -1,35 +1,35 @@
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
-import { Tabs, router } from 'expo-router';
-import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+import { Slot, usePathname, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icon, IconName } from '@/components/Icon';
 import { Txt } from '@/components/ui';
 import { colors, shadows } from '@/theme';
 
-const TABS: Record<string, { label: string; icon: IconName }> = {
-  index: { label: 'Home', icon: 'home' },
-  documents: { label: 'Documents', icon: 'folder' },
-  discussions: { label: 'Discussions', icon: 'chat' },
-  profile: { label: 'Profile', icon: 'user' },
-};
+type TabHref = '/' | '/documents' | '/discussions' | '/profile';
 
-function BottomNav({ state, navigation }: BottomTabBarProps) {
+const TABS: { href: TabHref; label: string; icon: IconName }[] = [
+  { href: '/', label: 'Home', icon: 'home' },
+  { href: '/documents', label: 'Documents', icon: 'folder' },
+  { href: '/discussions', label: 'Discussions', icon: 'chat' },
+  { href: '/profile', label: 'Profile', icon: 'user' },
+];
+
+function BottomNav() {
   const insets = useSafeAreaInsets();
-  const routes = state.routes.filter((r) => TABS[r.name]);
-  const item = (routeIndex: number) => {
-    const route = routes[routeIndex];
-    const focused = state.routes[state.index]?.key === route.key;
-    const t = TABS[route.name];
+  const pathname = usePathname();
+  const router = useRouter();
+  const item = (tabIndex: number) => {
+    const t = TABS[tabIndex];
+    const focused = t.href === '/' ? pathname === '/' : pathname.startsWith(t.href);
     return (
       <Pressable
-        key={route.key}
+        key={t.href}
         accessibilityRole="tab"
         accessibilityState={{ selected: focused }}
         accessibilityLabel={t.label}
         onPress={() => {
-          const e = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
-          if (!focused && !e.defaultPrevented) navigation.navigate(route.name);
+          if (!focused) router.navigate(t.href);
         }}
         style={styles.item}
       >
@@ -59,16 +59,15 @@ function BottomNav({ state, navigation }: BottomTabBarProps) {
 
 export default function TabsLayout() {
   return (
-    <Tabs screenOptions={{ headerShown: false }} tabBar={(p) => <BottomNav {...p} />}>
-      <Tabs.Screen name="index" />
-      <Tabs.Screen name="documents" />
-      <Tabs.Screen name="discussions" />
-      <Tabs.Screen name="profile" />
-    </Tabs>
+    <View style={styles.root}>
+      <Slot />
+      <BottomNav />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1 },
   bar: {
     position: 'absolute',
     left: 0,

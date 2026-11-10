@@ -6,10 +6,6 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "splash": {
-      "backgroundColor": "#141A4F"
-    },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "tn.supcom.unilink"
@@ -29,7 +25,15 @@
         {
           "photosPermission": "Unilink needs your photos to attach pictures to items and lost & found reports."
         }
-      ]
+      ],
+      "expo-sharing",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#141A4F"
+        }
+      ],
+      "expo-status-bar"
     ],
     "experiments": {
       "typedRoutes": false
