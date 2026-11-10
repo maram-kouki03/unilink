@@ -1,0 +1,26 @@
+# Minimal Supabase CLI config (used by `supabase start` / `supabase db push`).
+project_id = "unilink"
+
+[api]
+port = 54321
+
+[db]
+port = 54322
+major_version = 15
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
+
+[auth]
+site_url = "unilink://"
+additional_redirect_urls = ["unilink://", "unilink://auth-callback", "exp://*"]
+
+[auth.email]
+enable_signup = true
+enable_confirmations = true
+
+[auth.external.google]
+enabled = false
+client_id = "env(SUPABASE_AUTH_GOOGLE_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_GOOGLE_SECRET)"

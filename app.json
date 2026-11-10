@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "Unilink",
+    "slug": "unilink",
+    "scheme": "unilink",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#141A4F"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "tn.supcom.unilink"
+    },
+    "android": {
+      "package": "tn.supcom.unilink",
+      "adaptiveIcon": {
+        "backgroundColor": "#141A4F"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-web-browser",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Unilink needs your photos to attach pictures to items and lost & found reports."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}
