@@ -26,12 +26,14 @@ function AuthGate() {
   const segments = useSegments();
   const router = useRouter();
 
+  const inAuth = segments[0] === '(auth)';
+  const signedIn = !!session;
+
   useEffect(() => {
     if (loading) return;
-    const inAuth = segments[0] === '(auth)';
-    if (!session && !inAuth) router.replace('/welcome');
-    else if (session && inAuth) router.replace('/');
-  }, [session, loading, segments, router]);
+    if (!signedIn && !inAuth) router.replace('/welcome');
+    else if (signedIn && inAuth) router.replace('/');
+  }, [signedIn, loading, inAuth, router]);
 
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg }, animation: 'slide_from_right' }}>

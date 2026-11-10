@@ -283,21 +283,26 @@ export function Field({
           {label}
         </Txt>
       ) : null}
+      {/* The shadow props are always set (only shadowOpacity changes) and collapsable is false:
+          adding/removing shadow props on focus changed the native view tree on Android (Fabric),
+          which re-mounted the TextInput and made it lose focus / lag. */}
       <View
-        style={[
-          {
-            minHeight: multiline ? 92 : 54,
-            borderRadius: radius.md,
-            backgroundColor: colors.card,
-            borderWidth: 1.5,
-            borderColor: focused ? colors.royal : colors.border,
-            flexDirection: 'row',
-            alignItems: multiline ? 'flex-start' : 'center',
-            paddingHorizontal: 14,
-            gap: 10,
-          },
-          focused && { shadowColor: colors.royal, shadowOpacity: 0.15, shadowRadius: 6, shadowOffset: { width: 0, height: 0 } },
-        ]}
+        collapsable={false}
+        style={{
+          minHeight: multiline ? 92 : 54,
+          borderRadius: radius.md,
+          backgroundColor: colors.card,
+          borderWidth: 1.5,
+          borderColor: focused ? colors.royal : colors.border,
+          flexDirection: 'row',
+          alignItems: multiline ? 'flex-start' : 'center',
+          paddingHorizontal: 14,
+          gap: 10,
+          shadowColor: colors.royal,
+          shadowOpacity: focused ? 0.15 : 0,
+          shadowRadius: 6,
+          shadowOffset: { width: 0, height: 0 },
+        }}
       >
         {icon ? <Icon name={icon} size={20} color={colors.navy} /> : null}
         <TextInput
