@@ -1,6 +1,6 @@
 # Unilink · Connect • Share • Belong
 
-The SUP'COM student app: a Drive-style document library, carpooling, rents & borrow, lost & found, campus map, events, discussions and direct messages, all behind a `@supcom.tn` login.
+This is The SUP'COM student app: a Drive-style document library, carpooling, rents & borrow, lost & found, campus map, events, discussions and direct messages, all behind a `@supcom.tn` login.
 
 **Stack:** Expo (React Native, SDK 54) + Expo Router + TypeScript · TanStack Query · Supabase (Postgres, Auth, Storage, Realtime) · react-native-svg for the illustrations from the design board.
 
