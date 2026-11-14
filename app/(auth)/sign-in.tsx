@@ -8,35 +8,28 @@ import { useAuth } from '@/providers/AuthProvider';
 import { colors } from '@/theme';
 
 export default function SignIn() {
-  const { signIn, signInWithGoogle, resetPassword } = useAuth();
+  const { signIn } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
   const [remember, setRemember] = useState(true);
-  const [busy, setBusy] = useState<'email' | 'google' | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
-  const run = async (kind: 'email' | 'google') => {
+  const run = async () => {
     setError(null);
-    setBusy(kind);
+    setBusy(true);
     try {
-      if (kind === 'email') await signIn(email, password, remember);
-      else await signInWithGoogle();
+      await signIn(email, password, remember);
     } catch (e) {
       setError(e);
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   };
 
-  const forgot = async () => {
-    try {
-      await resetPassword(email);
-      Alert.alert('Check your inbox', 'We sent you a link to reset your password.');
-    } catch (e) {
-      setError(e);
-    }
-  };
+  const forgot = () =>
+    Alert.alert('Forgot your password?', 'Contact unilink@supcom.tn from your university e-mail and we will help you reset it.');
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -102,15 +95,7 @@ export default function SignIn() {
           </Pressable>
         </Row>
         <ErrorNote error={error} />
-        <Button title="Log In" arrow loading={busy === 'email'} onPress={() => run('email')} />
-        <Row gap={12}>
-          <View style={{ flex: 1, height: 1, backgroundColor: '#DCDDF0' }} />
-          <Txt size={13} color={colors.muted}>
-            or
-          </Txt>
-          <View style={{ flex: 1, height: 1, backgroundColor: '#DCDDF0' }} />
-        </Row>
-        <Button title="Continue with Google" variant="outline" loading={busy === 'google'} onPress={() => run('google')} />
+        <Button title="Log In" arrow loading={busy} onPress={run} />
         <Row gap={4} style={{ justifyContent: 'center', marginTop: 12 }}>
           <Txt size={14} color={colors.muted}>
             Don't have an account?

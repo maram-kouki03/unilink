@@ -1,33 +1,36 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { currentUserId, supabase, unwrap } from '@/lib/supabase';
-import { BUCKET_IMAGES, uploadLocalFile } from '@/lib/storage';
+import { api, formFile } from '@/lib/api';
 import { ItemMode, ItemRow, LostFoundRow, LostKind } from '@/types/db';
 
-const ITEM_SELECT = '*, owner:profiles!items_owner_id_fkey(id, full_name, level)';
+/** Append text fields to a FormData, skipping empty values. */
+function appendFields(form: FormData, fields: Record<string, string | number | boolean | null | undefined>) {
+  Object.entries(fields).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== '') form.append(k, String(v));
+  });
+}
+
+/** Attach a picked photo (file:// uri) to the FormData under "photo". */
+function appendPhoto(form: FormData, uri?: string | null) {
+  if (!uri) return;
+  const ext = (uri.split('?')[0].split('.').pop() ?? '').toLowerCase();
+  const kind = ext === 'png' ? 'png' : ext === 'webp' ? 'webp' : 'jpg';
+  form.append('photo', formFile(uri, `photo.${kind}`, kind === 'jpg' ? 'image/jpeg' : `image/${kind}`));
+}
 
 /* ───────────── Rents & Borrow ───────────── */
 
 export function useItems(mode: ItemMode, q: string) {
   return useQuery({
     queryKey: ['items', mode, q],
-    queryFn: async () => {
-      let query = supabase.from('items').select(ITEM_SELECT).eq('mode', mode).eq('available', true).order('created_at', { ascending: false }).limit(60);
-      if (q.trim()) query = query.ilike('title', `%${q.trim()}%`);
-      return unwrap(await query) as ItemRow[];
-    },
+    queryFn: () => api<ItemRow[]>('/items', { query: { mode, q: q.trim() } }),
   });
 }
 
 export function useItem(id: string) {
   return useQuery({
     queryKey: ['item', id],
-    queryFn: async () => unwrap(await supabase.from('items').select(ITEM_SELECT).eq('id', id).single()) as ItemRow,
+    queryFn: () => api<ItemRow>(`/items/${id}`),
   });
-}
-
-export async function uploadImage(kind: 'items' | 'lost' | 'avatars', uri: string) {
-  const uid = await currentUserId();
-  return uploadLocalFile({ bucket: BUCKET_IMAGES, folder: `${kind}/${uid}`, uri, fileName: 'photo.jpg', contentType: 'image/jpeg' });
 }
 
 export function useCreateItem() {
@@ -46,8 +49,10 @@ export function useCreateItem() {
       photoUri?: string | null;
     }) => {
       const { photoUri, ...row } = p;
-      const photo_path = photoUri ? await uploadImage('items', photoUri) : null;
-      return unwrap(await supabase.from('items').insert({ ...row, photo_path }).select('id').single()) as { id: string };
+      const form = new FormData();
+      appendFields(form, row);
+      appendPhoto(form, photoUri);
+      return api<{ id: string }>('/items', { body: form });
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['items'] }),
   });
@@ -56,8 +61,8 @@ export function useCreateItem() {
 export function useSetItemAvailable() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, available }: { id: string; available: boolean }) =>
-      unwrap(await supabase.from('items').update({ available }).eq('id', id)),
+    mutationFn: ({ id, available }: { id: string; available: boolean }) =>
+      api(`/items/${id}/availability`, { method: 'PATCH', body: { available } }),
     onSuccess: (_d, v) => {
       qc.invalidateQueries({ queryKey: ['item', v.id] });
       qc.invalidateQueries({ queryKey: ['items'] });
@@ -70,32 +75,14 @@ export function useSetItemAvailable() {
 export function useLostFound(kind: LostKind) {
   return useQuery({
     queryKey: ['lostFound', kind],
-    queryFn: async () =>
-      unwrap(
-        await supabase
-          .from('lost_found')
-          .select('*, reporter:profiles!lost_found_reporter_id_fkey(id, full_name)')
-          .eq('kind', kind)
-          .order('status')
-          .order('created_at', { ascending: false })
-          .limit(60),
-      ) as LostFoundRow[],
+    queryFn: () => api<LostFoundRow[]>('/lost-found', { query: { kind } }),
   });
 }
 
 export function useReturnedThisMonth() {
   return useQuery({
     queryKey: ['lostFoundReturned'],
-    queryFn: async () => {
-      const start = new Date();
-      start.setDate(1);
-      const { count } = await supabase
-        .from('lost_found')
-        .select('id', { count: 'exact', head: true })
-        .eq('status', 'returned')
-        .gte('created_at', start.toISOString());
-      return count ?? 0;
-    },
+    queryFn: async () => (await api<{ count: number }>('/lost-found/returned-count')).count,
   });
 }
 
@@ -112,8 +99,10 @@ export function useReportLostFound() {
       photoUri?: string | null;
     }) => {
       const { photoUri, ...row } = p;
-      const photo_path = photoUri ? await uploadImage('lost', photoUri) : null;
-      return unwrap(await supabase.from('lost_found').insert({ ...row, photo_path }).select('id').single());
+      const form = new FormData();
+      appendFields(form, row);
+      appendPhoto(form, photoUri);
+      return api<{ id: string }>('/lost-found', { body: form });
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['lostFound'] }),
   });
@@ -122,7 +111,10 @@ export function useReportLostFound() {
 export function useMarkReturned() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (id: string) => unwrap(await supabase.from('lost_found').update({ status: 'returned' }).eq('id', id)),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['lostFound'] }),
+    mutationFn: (id: string) => api(`/lost-found/${id}/returned`, { method: 'POST' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['lostFound'] });
+      qc.invalidateQueries({ queryKey: ['lostFoundReturned'] });
+    },
   });
 }

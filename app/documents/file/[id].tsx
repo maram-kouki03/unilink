@@ -19,20 +19,18 @@ export default function FilePreview() {
   const [urlError, setUrlError] = useState<unknown>(null);
 
   useEffect(() => {
-    if (doc.data) signedDocUrl(doc.data.file_path).then(setUrl).catch(setUrlError);
-  }, [doc.data]);
+    if (doc.data?.id) signedDocUrl(doc.data.id).then(setUrl).catch(setUrlError);
+  }, [doc.data?.id]);
 
   if (doc.isLoading) return <Screen><Loading /></Screen>;
   if (!doc.data) return <Screen><Header title="File" /><ErrorNote error={doc.error ?? 'File not found'} /></Screen>;
   const d = doc.data;
 
-  // iOS renders PDFs natively in WebView; Android needs a viewer.
-  const viewerUrl =
-    url && (Platform.OS === 'ios' || d.file_ext !== 'pdf')
-      ? url
-      : url
-        ? `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(url)}`
-        : null;
+  // iOS renders PDFs natively in WebView; Android needs the Google Docs viewer,
+  // which can only fetch public https links (not the PC's http://192.168… address used in development).
+  const androidPdf = Platform.OS !== 'ios' && d.file_ext === 'pdf';
+  const previewUnavailable = !!url && androidPdf && !url.startsWith('https://');
+  const viewerUrl = !url || previewUnavailable ? null : androidPdf ? `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(url)}` : url;
 
   return (
     <Screen
@@ -65,7 +63,13 @@ export default function FilePreview() {
           <ErrorNote error={urlError} />
           {viewerUrl ? (
             <WebView source={{ uri: viewerUrl }} startInLoadingState renderLoading={() => <ActivityIndicator style={{ flex: 1 }} color={colors.royal} />} style={{ flex: 1, backgroundColor: '#E2E3F3' }} />
-          ) : (
+          ) : previewUnavailable ? (
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+              <Txt size={14} weight={600} color={colors.muted} style={{ textAlign: 'center' }}>
+                Preview not available on Android in development — tap Download
+              </Txt>
+            </View>
+          ) : urlError ? null : (
             <Loading label="Preparing preview…" />
           )}
         </View>

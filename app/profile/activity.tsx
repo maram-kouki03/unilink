@@ -1,30 +1,19 @@
 import React, { useState } from 'react';
 import { View } from 'react-native';
 import { router } from 'expo-router';
-import { useQuery } from '@tanstack/react-query';
 import { FileRow, ItemCard, PostCard, RideCard } from '@/components/cards';
 import { Card, ChipRow, EmptyState, Header, Loading, Screen } from '@/components/ui';
-import { useToggleLike } from '@/api/social';
+import { ActivityTab, useActivity, useToggleLike } from '@/api/social';
 import { useFileActions } from '@/components/useFileActions';
-import { currentUserId, supabase, unwrap } from '@/lib/supabase';
 import { DocumentRow, ItemRow, PostFeed, RideFeed } from '@/types/db';
 
-type Tab = 'posts' | 'rides' | 'items' | 'uploads';
+type Tab = ActivityTab;
 
 export default function MyActivities() {
   const [tab, setTab] = useState<Tab>('posts');
   const like = useToggleLike();
   const { open, actionsFor, sheet } = useFileActions();
-  const q = useQuery({
-    queryKey: ['activity', tab],
-    queryFn: async () => {
-      const uid = await currentUserId();
-      if (tab === 'posts') return unwrap(await supabase.from('posts_feed').select('*').eq('author_id', uid).order('created_at', { ascending: false })) as PostFeed[];
-      if (tab === 'rides') return unwrap(await supabase.from('rides_feed').select('*').eq('driver_id', uid).order('departure_at', { ascending: false })) as RideFeed[];
-      if (tab === 'items') return unwrap(await supabase.from('items').select('*').eq('owner_id', uid).order('created_at', { ascending: false })) as ItemRow[];
-      return unwrap(await supabase.from('documents').select('*').eq('uploader_id', uid).order('created_at', { ascending: false })) as DocumentRow[];
-    },
-  });
+  const q = useActivity(tab);
   const data = (q.data ?? []) as unknown[];
 
   return (

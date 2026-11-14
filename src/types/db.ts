@@ -1,6 +1,5 @@
 /**
- * Hand-written row types matching supabase/migrations.
- * Tip: once your project is linked, run `npm run db:types` to generate exact types.
+ * Hand-written row types matching supabase/migrations and the JSON returned by backend/.
  */
 
 export type LevelCode = '1A' | '2A' | '3A' | 'MASTERE' | 'DOCTORAT';

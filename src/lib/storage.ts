@@ -1,62 +1,38 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import { decode } from 'base64-arraybuffer';
-import { supabase } from './supabase';
-
-export const BUCKET_DOCS = 'documents';
-export const BUCKET_IMAGES = 'images';
-
-const uuid = () =>
-  'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
-  });
+import { api, API_URL } from './api';
 
 export const extOf = (name: string) => (name.split('.').pop() ?? '').toLowerCase();
 
-/** Upload a local file:// uri to a Supabase Storage bucket. Returns the object path. */
-export async function uploadLocalFile(opts: {
-  bucket: string;
-  folder: string;
-  uri: string;
-  fileName: string;
-  contentType?: string;
-}): Promise<string> {
-  const base64 = await FileSystem.readAsStringAsync(opts.uri, { encoding: 'base64' });
-  const path = `${opts.folder}/${uuid()}.${extOf(opts.fileName) || 'bin'}`;
-  const { error } = await supabase.storage
-    .from(opts.bucket)
-    .upload(path, decode(base64), { contentType: opts.contentType ?? 'application/octet-stream', upsert: false });
-  if (error) throw new Error(error.message);
-  return path;
-}
-
+/** Public URL of an item / lost & found photo stored by the backend (photo_path = "images/<file>"). */
 export function publicImageUrl(path?: string | null) {
   if (!path) return null;
-  return supabase.storage.from(BUCKET_IMAGES).getPublicUrl(path).data.publicUrl;
+  return `${API_URL}/uploads/${path}`;
 }
 
-export async function signedDocUrl(path: string, expiresIn = 60 * 60) {
-  const { data, error } = await supabase.storage.from(BUCKET_DOCS).createSignedUrl(path, expiresIn);
-  if (error) throw new Error(error.message);
-  return data.signedUrl;
+/** Signed link to a private document (valid 1 hour). */
+export async function signedDocUrl(documentId: string) {
+  const { url } = await api<{ url: string }>(`/documents/${documentId}/link`);
+  return url;
 }
+
+const safeName = (fileName: string) => fileName.replace(/[^\w.\- ]+/g, '_');
 
 /** Download a document to the device cache and open the share sheet (Save to Files / Drive / etc.). */
-export async function downloadAndShare(path: string, fileName: string) {
-  const url = await signedDocUrl(path, 300);
-  const safe = fileName.replace(/[^\w.\- ]+/g, '_');
-  const target = `${FileSystem.cacheDirectory}${safe}`;
-  const res = await FileSystem.downloadAsync(url, target);
+export async function downloadAndShare(documentId: string, fileName: string) {
+  const url = await signedDocUrl(documentId);
+  const res = await FileSystem.downloadAsync(url, `${FileSystem.cacheDirectory}${safeName(fileName)}`);
+  if (res.status >= 400) throw new Error('The file could not be downloaded.');
   if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(res.uri);
   return res.uri;
 }
 
 /** Keep a copy in the app's document directory so it opens offline. */
-export async function saveOffline(path: string, fileName: string) {
-  const url = await signedDocUrl(path, 300);
+export async function saveOffline(documentId: string, fileName: string) {
+  const url = await signedDocUrl(documentId);
   const dir = `${FileSystem.documentDirectory}offline/`;
   await FileSystem.makeDirectoryAsync(dir, { intermediates: true }).catch(() => undefined);
-  const res = await FileSystem.downloadAsync(url, dir + fileName.replace(/[^\w.\- ]+/g, '_'));
+  const res = await FileSystem.downloadAsync(url, dir + safeName(fileName));
+  if (res.status >= 400) throw new Error('The file could not be downloaded.');
   return res.uri;
 }

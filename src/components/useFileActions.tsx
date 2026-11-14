@@ -17,7 +17,7 @@ export function useFileActions() {
 
   const download = async (d: DocumentRow) => {
     try {
-      await downloadAndShare(d.file_path, d.file_name);
+      await downloadAndShare(d.id, d.file_name);
       countDownload(d.id).catch(() => undefined);
     } catch (e) {
       Alert.alert('Download failed', e instanceof Error ? e.message : String(e));
@@ -39,7 +39,7 @@ export function useFileActions() {
           icon: 'offline' as const,
           onPress: async () => {
             try {
-              await saveOffline(target.file_path, target.file_name);
+              await saveOffline(target.id, target.file_name);
               Alert.alert('Saved', 'Available offline on this phone.');
             } catch (e) {
               Alert.alert('Could not save', e instanceof Error ? e.message : String(e));
@@ -50,7 +50,7 @@ export function useFileActions() {
           label: 'Share',
           icon: 'share' as const,
           onPress: async () => {
-            const url = target.drive_url ?? (await signedDocUrl(target.file_path, 60 * 60 * 24 * 7));
+            const url = target.drive_url ?? (await signedDocUrl(target.id));
             Share.share({ message: `${target.title} – ${url}` });
           },
         },

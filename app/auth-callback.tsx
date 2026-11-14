@@ -1,6 +1,6 @@
 import { Redirect } from 'expo-router';
 
-/** Deep-link target for OAuth / e-mail confirmation. The AuthProvider handles the session. */
+/** Old deep-link target (unilink://auth-callback). Kept so old links still open the app. */
 export default function AuthCallback() {
   return <Redirect href="/" />;
 }

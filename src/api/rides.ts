@@ -1,49 +1,32 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { supabase, unwrap } from '@/lib/supabase';
+import { api } from '@/lib/api';
 import { RideFeed, RideScope } from '@/types/db';
 
 export function useRides(scope: RideScope, q = '') {
   return useQuery({
     queryKey: ['rides', scope, q],
-    queryFn: async () => {
-      let query = supabase
-        .from('rides_feed')
-        .select('*')
-        .eq('scope', scope)
-        .gte('departure_at', new Date(Date.now() - 30 * 60 * 1000).toISOString())
-        .order('departure_at')
-        .limit(50);
-      if (q.trim()) query = query.ilike('from_place', `%${q.trim()}%`);
-      return unwrap(await query) as RideFeed[];
-    },
+    queryFn: () => api<RideFeed[]>('/rides', { query: { scope, q: q.trim() } }),
   });
 }
 
 export function useRide(id: string) {
   return useQuery({
     queryKey: ['ride', id],
-    queryFn: async () => unwrap(await supabase.from('rides_feed').select('*').eq('id', id).single()) as RideFeed,
+    queryFn: () => api<RideFeed>(`/rides/${id}`),
   });
 }
 
 export function useMyRides() {
   return useQuery({
     queryKey: ['myRides'],
-    queryFn: async () => {
-      const { data: s } = await supabase.auth.getSession();
-      const uid = s.session?.user.id;
-      const offered = unwrap(await supabase.from('rides_feed').select('*').eq('driver_id', uid).order('departure_at', { ascending: false })) as RideFeed[];
-      const booked = unwrap(await supabase.from('rides_feed').select('*').eq('booked_by_me', true).order('departure_at', { ascending: false })) as RideFeed[];
-      return { offered, booked };
-    },
+    queryFn: () => api<{ offered: RideFeed[]; booked: RideFeed[] }>('/rides/mine'),
   });
 }
 
 export function useBookRide() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ rideId, seats }: { rideId: string; seats: number }) =>
-      unwrap(await supabase.rpc('book_ride', { p_ride: rideId, p_seats: seats })),
+    mutationFn: ({ rideId, seats }: { rideId: string; seats: number }) => api<{ id: string }>(`/rides/${rideId}/book`, { body: { seats } }),
     onSuccess: (_d, v) => {
       qc.invalidateQueries({ queryKey: ['ride', v.rideId] });
       qc.invalidateQueries({ queryKey: ['rides'] });
@@ -55,7 +38,7 @@ export function useBookRide() {
 export function useCancelBooking() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (rideId: string) => unwrap(await supabase.rpc('cancel_booking', { p_ride: rideId })),
+    mutationFn: (rideId: string) => api(`/rides/${rideId}/cancel-booking`, { method: 'POST' }),
     onSuccess: (_d, rideId) => {
       qc.invalidateQueries({ queryKey: ['ride', rideId] });
       qc.invalidateQueries({ queryKey: ['rides'] });
@@ -67,7 +50,7 @@ export function useCancelBooking() {
 export function useOfferRide() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (r: {
+    mutationFn: (r: {
       scope: RideScope;
       from_place: string;
       to_place: string;
@@ -77,7 +60,7 @@ export function useOfferRide() {
       recurring: boolean;
       note?: string;
       car?: string;
-    }) => unwrap(await supabase.from('rides').insert(r).select('id').single()) as { id: string },
+    }) => api<{ id: string }>('/rides', { body: r }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['rides'] });
       qc.invalidateQueries({ queryKey: ['myRides'] });
@@ -88,7 +71,7 @@ export function useOfferRide() {
 export function useCancelRide() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (rideId: string) => unwrap(await supabase.from('rides').update({ cancelled: true }).eq('id', rideId)),
+    mutationFn: (rideId: string) => api(`/rides/${rideId}/cancel`, { method: 'POST' }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['rides'] });
       qc.invalidateQueries({ queryKey: ['myRides'] });

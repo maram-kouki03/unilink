@@ -1,15 +1,19 @@
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { currentUserId, supabase, unwrap } from '@/lib/supabase';
+import { api } from '@/lib/api';
+import { joinRoom, leaveRoom, onSocket } from '@/lib/socket';
 import {
   CommentRow,
   ConversationRow,
+  DocumentRow,
   EventCategory,
   EventFeed,
+  ItemRow,
   LevelCode,
   MessageRow,
   NotificationRow,
   PostFeed,
+  RideFeed,
 } from '@/types/db';
 
 /* ───────────── Events ───────────── */
@@ -17,30 +21,22 @@ import {
 export function useEvents(category: EventCategory | 'all', upcomingOnly = true) {
   return useQuery({
     queryKey: ['events', category, upcomingOnly],
-    queryFn: async () => {
-      let q = supabase.from('events_feed').select('*').order('starts_at');
-      if (category !== 'all') q = q.eq('category', category);
-      if (upcomingOnly) q = q.gte('starts_at', new Date(Date.now() - 12 * 3600 * 1000).toISOString());
-      return unwrap(await q) as EventFeed[];
-    },
+    queryFn: () => api<EventFeed[]>('/events', { query: { category, upcoming: upcomingOnly } }),
   });
 }
 
 export function useEvent(id: string) {
   return useQuery({
     queryKey: ['event', id],
-    queryFn: async () => unwrap(await supabase.from('events_feed').select('*').eq('id', id).single()) as EventFeed,
+    queryFn: () => api<EventFeed>(`/events/${id}`),
   });
 }
 
 export function useToggleRegistration() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, registered }: { id: string; registered: boolean }) => {
-      const uid = await currentUserId();
-      if (registered) unwrap(await supabase.from('event_registrations').delete().eq('event_id', id).eq('user_id', uid));
-      else unwrap(await supabase.from('event_registrations').insert({ event_id: id }));
-    },
+    // The server toggles; `registered` is kept so the screens don't change.
+    mutationFn: ({ id }: { id: string; registered: boolean }) => api<{ registered: boolean }>(`/events/${id}/register`, { method: 'POST' }),
     onSuccess: (_d, v) => {
       qc.invalidateQueries({ queryKey: ['event', v.id] });
       qc.invalidateQueries({ queryKey: ['events'] });
@@ -53,59 +49,47 @@ export function useToggleRegistration() {
 export function usePosts(scope: 'general' | 'level', level?: LevelCode | null) {
   return useQuery({
     queryKey: ['posts', scope, level ?? null],
-    queryFn: async () => {
-      let q = supabase.from('posts_feed').select('*').eq('scope', scope).order('created_at', { ascending: false }).limit(50);
-      if (scope === 'level' && level) q = q.eq('level_code', level);
-      return unwrap(await q) as PostFeed[];
-    },
+    queryFn: () => api<PostFeed[]>('/posts', { query: { scope, level: scope === 'level' ? level : undefined } }),
   });
 }
 
 export function usePost(id: string) {
   return useQuery({
     queryKey: ['post', id],
-    queryFn: async () => unwrap(await supabase.from('posts_feed').select('*').eq('id', id).single()) as PostFeed,
+    queryFn: () => api<PostFeed>(`/posts/${id}`),
   });
 }
 
 export function useComments(postId: string) {
   const qc = useQueryClient();
-  // Live replies via Supabase Realtime
+  // Live replies via Socket.io (room post:<id>)
   useEffect(() => {
-    const ch = supabase
-      .channel(`comments:${postId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'comments', filter: `post_id=eq.${postId}` }, () => {
-        qc.invalidateQueries({ queryKey: ['comments', postId] });
-        qc.invalidateQueries({ queryKey: ['post', postId] });
-      })
-      .subscribe();
+    const room = `post:${postId}`;
+    joinRoom(room);
+    const refresh = (c: { post_id?: string }) => {
+      if (c?.post_id !== postId) return;
+      qc.invalidateQueries({ queryKey: ['comments', postId] });
+      qc.invalidateQueries({ queryKey: ['post', postId] });
+    };
+    const offNew = onSocket<CommentRow>('comment:new', refresh);
+    const offUpdated = onSocket<{ post_id: string }>('comment:updated', refresh);
     return () => {
-      supabase.removeChannel(ch);
+      offNew();
+      offUpdated();
+      leaveRoom(room);
     };
   }, [postId, qc]);
 
   return useQuery({
     queryKey: ['comments', postId],
-    queryFn: async () =>
-      unwrap(
-        await supabase
-          .from('comments')
-          .select('*, author:profiles!comments_author_id_fkey(id, full_name, level)')
-          .eq('post_id', postId)
-          .order('is_best', { ascending: false })
-          .order('created_at'),
-      ) as CommentRow[],
+    queryFn: () => api<CommentRow[]>(`/posts/${postId}/comments`),
   });
 }
 
 export function useToggleLike() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (post: PostFeed) => {
-      const uid = await currentUserId();
-      if (post.liked_by_me) unwrap(await supabase.from('post_likes').delete().eq('post_id', post.id).eq('user_id', uid));
-      else unwrap(await supabase.from('post_likes').insert({ post_id: post.id }));
-    },
+    mutationFn: (post: PostFeed) => api<{ liked: boolean }>(`/posts/${post.id}/like`, { method: 'POST' }),
     // optimistic update on every cached feed
     onMutate: async (post) => {
       const flip = (p: PostFeed) =>
@@ -123,8 +107,8 @@ export function useToggleLike() {
 export function useCreatePost() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (p: { scope: 'general' | 'level'; level_code: LevelCode | null; topic: string | null; body: string }) =>
-      unwrap(await supabase.from('posts').insert(p).select('id').single()) as { id: string },
+    mutationFn: (p: { scope: 'general' | 'level'; level_code: LevelCode | null; topic: string | null; body: string }) =>
+      api<{ id: string }>('/posts', { body: p }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['posts'] });
       qc.invalidateQueries({ queryKey: ['profileStats'] });
@@ -135,8 +119,8 @@ export function useCreatePost() {
 export function useAddComment(postId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (p: { body: string; parent_id?: string | null }) =>
-      unwrap(await supabase.from('comments').insert({ post_id: postId, body: p.body, parent_id: p.parent_id ?? null })),
+    mutationFn: (p: { body: string; parent_id?: string | null }) =>
+      api<CommentRow>(`/posts/${postId}/comments`, { body: { body: p.body, parent_id: p.parent_id ?? null } }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['comments', postId] });
       qc.invalidateQueries({ queryKey: ['post', postId] });
@@ -148,7 +132,7 @@ export function useAddComment(postId: string) {
 export function useMarkBest(postId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (commentId: string) => unwrap(await supabase.rpc('mark_best_answer', { p_comment: commentId })),
+    mutationFn: (commentId: string) => api(`/comments/${commentId}/best`, { method: 'POST' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['comments', postId] }),
   });
 }
@@ -156,46 +140,48 @@ export function useMarkBest(postId: string) {
 /* ───────────── Direct messages ───────────── */
 
 export async function startConversation(otherId: string, context: string) {
-  return unwrap(await supabase.rpc('start_conversation', { p_other: otherId, p_context: context })) as string;
+  const { id } = await api<{ id: string }>('/conversations', { body: { otherId, context } });
+  return id;
 }
 
 export function useConversations() {
   return useQuery({
     queryKey: ['conversations'],
-    queryFn: async () => unwrap(await supabase.from('my_conversations').select('*').order('last_at', { ascending: false })) as ConversationRow[],
+    queryFn: () => api<ConversationRow[]>('/conversations'),
   });
 }
 
+const appendMessage = (old: MessageRow[] | undefined, msg: MessageRow) => (old?.some((m) => m.id === msg.id) ? old : [...(old ?? []), msg]);
+
 export function useMessages(conversationId: string) {
   const qc = useQueryClient();
+  // Live messages via Socket.io (room conv:<id>, members only)
   useEffect(() => {
-    const ch = supabase
-      .channel(`messages:${conversationId}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${conversationId}` }, (payload) => {
-        qc.setQueryData<MessageRow[]>(['messages', conversationId], (old) =>
-          old?.some((m) => m.id === (payload.new as MessageRow).id) ? old : [...(old ?? []), payload.new as MessageRow],
-        );
-      })
-      .subscribe();
+    const room = `conv:${conversationId}`;
+    joinRoom(room);
+    const off = onSocket<MessageRow>('message:new', (msg) => {
+      if (msg?.conversation_id !== conversationId) return;
+      qc.setQueryData<MessageRow[]>(['messages', conversationId], (old) => appendMessage(old, msg));
+      qc.invalidateQueries({ queryKey: ['conversations'] });
+    });
     return () => {
-      supabase.removeChannel(ch);
+      off();
+      leaveRoom(room);
     };
   }, [conversationId, qc]);
 
   return useQuery({
     queryKey: ['messages', conversationId],
-    queryFn: async () =>
-      unwrap(await supabase.from('messages').select('*').eq('conversation_id', conversationId).order('created_at')) as MessageRow[],
+    queryFn: () => api<MessageRow[]>(`/conversations/${conversationId}/messages`),
   });
 }
 
 export function useSendMessage(conversationId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (body: string) =>
-      unwrap(await supabase.from('messages').insert({ conversation_id: conversationId, body }).select('*').single()) as MessageRow,
+    mutationFn: (body: string) => api<MessageRow>(`/conversations/${conversationId}/messages`, { body: { body } }),
     onSuccess: (msg) => {
-      qc.setQueryData<MessageRow[]>(['messages', conversationId], (old) => (old?.some((m) => m.id === msg.id) ? old : [...(old ?? []), msg]));
+      qc.setQueryData<MessageRow[]>(['messages', conversationId], (old) => appendMessage(old, msg));
       qc.invalidateQueries({ queryKey: ['conversations'] });
     },
   });
@@ -205,37 +191,25 @@ export function useSendMessage(conversationId: string) {
 
 export function useNotifications() {
   const qc = useQueryClient();
-  useEffect(() => {
-    let ch: ReturnType<typeof supabase.channel> | null = null;
-    currentUserId()
-      .then((uid) => {
-        ch = supabase
-          .channel(`notifications:${uid}:${Math.random().toString(36).slice(2)}`)
-          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${uid}` }, () =>
-            qc.invalidateQueries({ queryKey: ['notifications'] }),
-          )
-          .subscribe();
-      })
-      .catch(() => undefined);
-    return () => {
-      if (ch) supabase.removeChannel(ch);
-    };
-  }, [qc]);
+  // The server puts every signed-in socket in room user:<id> automatically.
+  useEffect(
+    () =>
+      onSocket<NotificationRow>('notification:new', () => {
+        qc.invalidateQueries({ queryKey: ['notifications'] });
+      }),
+    [qc],
+  );
 
   return useQuery({
     queryKey: ['notifications'],
-    queryFn: async () =>
-      unwrap(await supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(50)) as NotificationRow[],
+    queryFn: () => api<NotificationRow[]>('/notifications'),
   });
 }
 
 export function useMarkAllRead() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async () => {
-      const uid = await currentUserId();
-      unwrap(await supabase.from('notifications').update({ read_at: new Date().toISOString() }).eq('user_id', uid).is('read_at', null));
-    },
+    mutationFn: () => api('/notifications/read-all', { method: 'POST' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
   });
 }
@@ -245,26 +219,25 @@ export function useMarkAllRead() {
 export function useProfileStats() {
   return useQuery({
     queryKey: ['profileStats'],
-    queryFn: async () => {
-      const uid = await currentUserId();
-      const head = { count: 'exact' as const, head: true };
-      const [u, r, p] = await Promise.all([
-        supabase.from('documents').select('id', head).eq('uploader_id', uid),
-        supabase.from('rides').select('id', head).eq('driver_id', uid),
-        supabase.from('posts').select('id', head).eq('author_id', uid),
-      ]);
-      return { uploads: u.count ?? 0, rides: r.count ?? 0, posts: p.count ?? 0 };
-    },
+    queryFn: () => api<{ uploads: number; rides: number; posts: number }>('/me/stats'),
+  });
+}
+
+export type ActivityTab = 'posts' | 'rides' | 'items' | 'uploads';
+
+/** "My Activities" lists: my posts, rides I offer, my items, my uploads. */
+export function useActivity(tab: ActivityTab) {
+  return useQuery({
+    queryKey: ['activity', tab],
+    queryFn: () => api<PostFeed[] | RideFeed[] | ItemRow[] | DocumentRow[]>('/me/activity', { query: { tab } }),
   });
 }
 
 export function useUpdateProfile() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (p: { full_name?: string; username?: string; level?: LevelCode; period?: string | null }) => {
-      const uid = await currentUserId();
-      unwrap(await supabase.from('profiles').update(p).eq('id', uid));
-    },
+    mutationFn: (p: { full_name?: string; username?: string; level?: LevelCode; period?: string | null }) =>
+      api('/me', { method: 'PATCH', body: p }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['profileStats'] }),
   });
 }
