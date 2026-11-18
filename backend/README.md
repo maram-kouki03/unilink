@@ -28,10 +28,60 @@ npm run dev
 | `PORT` | `4000` |
 | `ALLOWED_EMAIL_DOMAIN` | `supcom.tn` |
 | `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Cloudinary dashboard → **Settings → API Keys** |
+| `MAIL_RELAY_URL` | Google Apps Script web app URL (see *E-mails* below). Leave empty in development: codes are printed in the terminal. |
+| `MAIL_RELAY_SECRET` | Long random string, same value as the `SECRET` script property in Apps Script |
 
 SSL is turned on automatically for any non-localhost database. The pool is small (5 connections, 15 s connect timeout).
 
 Before the first start, the database must have the migrations `supabase/migrations/20261114000001_own_backend.sql` and `supabase/migrations/20261118000001_cloudinary_storage.sql` applied (Supabase → SQL Editor; both are safe to run twice).
+
+## Account security
+
+- Sign-up creates the account with `email_verified = false` and e-mails a 6-digit code. The account can log in only after `POST /auth/verify-email`.
+- Codes: `crypto.randomInt`, stored as HMAC-SHA256 (key `JWT_SECRET`) in `email_codes`, valid 15 minutes, 5 wrong attempts max, only the latest code of each purpose works. Max 1 new code per 60 s and 10 per hour per account.
+- Password rule (server and app): 8+ characters, uppercase, lowercase, number, special character.
+
+| Endpoint | Body | Answer |
+|---|---|---|
+| `POST /auth/signup` | `fullName, email, password, level` | `201 { needsVerification: true, email, codeSent }` |
+| `POST /auth/verify-email` | `email, code` | `{ token, profile }` |
+| `POST /auth/resend-code` | `email, purpose: "verify" \| "reset"` | `{ ok, message }` (429 `{ error, retryAfter }` if too soon) |
+| `POST /auth/login` | `email, password` | `{ token, profile }`, or `403 { error: "Please confirm your e-mail", needsVerification: true, email }` (a fresh code is sent) |
+| `POST /auth/forgot-password` | `email` | always `200 { ok, message }` |
+| `POST /auth/reset-password` | `email, code, password` | `{ token, profile }` |
+
+Migration: `supabase/migrations/20261119000001_account_security.sql` (existing accounts are marked verified).
+
+## E-mails (Google Apps Script relay)
+
+The backend POSTs `{ secret, to, subject, html }` to `MAIL_RELAY_URL` and expects `{ ok: true }` or `{ ok: false, error }`. Mails are sent from the Google account that owns the script (a free Gmail account can send about 100 e-mails per day).
+
+1. Go to [script.google.com](https://script.google.com) → **New project**, paste:
+
+   ```js
+   function doPost(e) {
+     var out = { ok: false };
+     try {
+       var body = JSON.parse(e.postData.contents);
+       var secret = PropertiesService.getScriptProperties().getProperty('SECRET');
+       if (!secret || body.secret !== secret) {
+         out.error = 'unauthorized';
+       } else if (!body.to || !body.subject || !body.html) {
+         out.error = 'missing to, subject or html';
+       } else {
+         MailApp.sendEmail({ to: body.to, subject: body.subject, htmlBody: body.html, name: 'Unilink' });
+         out = { ok: true };
+       }
+     } catch (err) {
+       out.error = String(err);
+     }
+     return ContentService.createTextOutput(JSON.stringify(out)).setMimeType(ContentService.MimeType.JSON);
+   }
+   ```
+
+2. **Project Settings → Script properties → Add**: `SECRET` = a long random string (`node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`).
+3. **Deploy → New deployment → Web app**: *Execute as*: **Me**, *Who has access*: **Anyone**. Authorize, then copy the URL ending in `/exec` → `MAIL_RELAY_URL`. Put the same secret in `MAIL_RELAY_SECRET`.
+4. After editing the script, use **Deploy → Manage deployments → Edit → New version** (the URL stays the same).
 
 ## Scripts
 
@@ -87,6 +137,8 @@ The repo root contains `render.yaml` (a Render *Blueprint*) for a **free** Node 
    | `CLOUDINARY_CLOUD_NAME` | from Cloudinary |
    | `CLOUDINARY_API_KEY` | from Cloudinary |
    | `CLOUDINARY_API_SECRET` | from Cloudinary |
+   | `MAIL_RELAY_URL` | Apps Script web app URL (`…/exec`) |
+   | `MAIL_RELAY_SECRET` | same value as the `SECRET` script property |
 
    Do **not** add `PORT`: Render sets it. `NODE_ENV=production` and `NODE_VERSION=22` come from `render.yaml`.
 5. When the deploy finishes, open `https://<your-service>.onrender.com/health`. It should show `{"ok":true,"db":"up",...}`.

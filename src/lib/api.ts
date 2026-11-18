@@ -57,6 +57,18 @@ export function setUnauthorizedHandler(fn: (() => void) | null) {
 
 /* ───────────── fetch wrapper ───────────── */
 
+/** Error answered by the server: status code + the whole JSON body (e.g. { error, needsVerification }). */
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+    public data: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 type Query = Record<string, string | number | boolean | null | undefined>;
 
 export type ApiOptions = {
@@ -113,11 +125,9 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
 
   if (!res.ok) {
     if (res.status === 401 && sentToken) onUnauthorized?.();
-    const message =
-      data && typeof data === 'object' && 'error' in data && typeof (data as { error: unknown }).error === 'string'
-        ? (data as { error: string }).error
-        : `Request failed (${res.status})`;
-    throw new Error(message);
+    const body = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+    const message = typeof body.error === 'string' ? body.error : `Request failed (${res.status})`;
+    throw new ApiError(res.status, message, body);
   }
   return data as T;
 }

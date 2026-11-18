@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQueryClient } from '@tanstack/react-query';
 import { ALLOWED_DOMAIN, api, clearToken, isAllowedEmail, loadToken, saveToken, setUnauthorizedHandler } from '@/lib/api';
 import { closeSocket, connectSocket } from '@/lib/socket';
+import { passwordOk } from '@/lib/password';
 import { LevelCode, Profile } from '@/types/db';
 
 const REMEMBER_KEY = 'unilink.remember';
@@ -15,10 +16,22 @@ type AuthCtx = {
   profile: Profile | null;
   loading: boolean;
   signIn: (email: string, password: string, remember?: boolean) => Promise<void>;
-  signUp: (p: { fullName: string; email: string; password: string; level: LevelCode }) => Promise<{ needsConfirmation: boolean }>;
+  /** Creates the account and e-mails a 6-digit code; the session starts after verifyEmail. */
+  signUp: (p: { fullName: string; email: string; password: string; level: LevelCode }) => Promise<{ email: string; codeSent: boolean }>;
+  verifyEmail: (email: string, code: string) => Promise<void>;
+  resendCode: (email: string, purpose: CodePurpose) => Promise<void>;
+  forgotPassword: (email: string) => Promise<void>;
+  resetPassword: (email: string, code: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 };
+
+export type CodePurpose = 'verify' | 'reset';
+
+const normEmail = (email: string) => email.trim().toLowerCase();
+
+const passwordError = () =>
+  new Error('Password must have 8+ characters, an uppercase letter, a lowercase letter, a number and a special character.');
 
 const Ctx = createContext<AuthCtx | null>(null);
 
@@ -91,20 +104,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       async signIn(email, password, remember = true) {
         if (!isAllowedEmail(email)) throw domainError();
         const res = await api<{ token: string; profile: Profile }>('/auth/login', {
-          body: { email: email.trim().toLowerCase(), password },
+          body: { email: normEmail(email), password },
         });
         await AsyncStorage.setItem(REMEMBER_KEY, remember ? '1' : '0');
         await startSession(res.token, res.profile);
       },
       async signUp({ fullName, email, password, level }) {
         if (!isAllowedEmail(email)) throw domainError();
-        if (password.length < 8) throw new Error('Password must be at least 8 characters.');
-        const res = await api<{ token: string; profile: Profile }>('/auth/signup', {
-          body: { fullName: fullName.trim(), email: email.trim().toLowerCase(), password, level },
+        if (!passwordOk(password)) throw passwordError();
+        const res = await api<{ needsVerification: true; email: string; codeSent: boolean }>('/auth/signup', {
+          body: { fullName: fullName.trim(), email: normEmail(email), password, level },
+        });
+        return { email: res.email, codeSent: res.codeSent };
+      },
+      async verifyEmail(email, code) {
+        const res = await api<{ token: string; profile: Profile }>('/auth/verify-email', { body: { email: normEmail(email), code } });
+        await AsyncStorage.setItem(REMEMBER_KEY, '1');
+        await startSession(res.token, res.profile);
+      },
+      async resendCode(email, purpose) {
+        await api('/auth/resend-code', { body: { email: normEmail(email), purpose } });
+      },
+      async forgotPassword(email) {
+        if (!isAllowedEmail(email)) throw domainError();
+        await api('/auth/forgot-password', { body: { email: normEmail(email) } });
+      },
+      async resetPassword(email, code, password) {
+        if (!passwordOk(password)) throw passwordError();
+        const res = await api<{ token: string; profile: Profile }>('/auth/reset-password', {
+          body: { email: normEmail(email), code, password },
         });
         await AsyncStorage.setItem(REMEMBER_KEY, '1');
         await startSession(res.token, res.profile);
-        return { needsConfirmation: false };
       },
       async signOut() {
         await AsyncStorage.removeItem(REMEMBER_KEY);

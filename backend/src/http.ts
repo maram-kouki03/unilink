@@ -6,6 +6,8 @@ export class HttpError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** Extra fields added to the JSON error body, e.g. { needsVerification: true }. */
+    public extra?: Record<string, unknown>,
   ) {
     super(message);
   }
@@ -70,7 +72,7 @@ function logError(err: any, req: Parameters<ErrorRequestHandler>[1]) {
 export const errorMiddleware: ErrorRequestHandler = (err, req, res, _next) => {
   if (err instanceof HttpError) {
     if (err.status >= 500) logError(err, req);
-    res.status(err.status).json({ error: err.message });
+    res.status(err.status).json({ ...err.extra, error: err.message });
     return;
   }
   if (err instanceof multer.MulterError) {

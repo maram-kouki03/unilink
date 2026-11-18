@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, Pressable, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, View } from 'react-native';
 import { router } from 'expo-router';
 import { Logo } from '@/components/Illustrations';
 import { Button, ErrorNote, Field, IconButton, Row, Screen, Txt } from '@/components/ui';
 import { Icon } from '@/components/Icon';
+import { ApiError } from '@/lib/api';
 import { useAuth } from '@/providers/AuthProvider';
 import { colors } from '@/theme';
 
@@ -22,14 +23,19 @@ export default function SignIn() {
     try {
       await signIn(email, password, remember);
     } catch (e) {
-      setError(e);
+      // Right password but the e-mail is not confirmed yet: the server just sent a fresh code.
+      if (e instanceof ApiError && e.data.needsVerification) {
+        const to = typeof e.data.email === 'string' ? e.data.email : email.trim().toLowerCase();
+        router.push({ pathname: '/verify-email', params: { email: to } });
+      } else {
+        setError(e);
+      }
     } finally {
       setBusy(false);
     }
   };
 
-  const forgot = () =>
-    Alert.alert('Forgot your password?', 'Contact unilink@supcom.tn from your university e-mail and we will help you reset it.');
+  const forgot = () => router.push({ pathname: '/forgot-password', params: email.trim() ? { email: email.trim() } : {} });
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>

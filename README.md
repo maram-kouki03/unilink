@@ -22,6 +22,7 @@ The app never talks to Supabase. Supabase's own API is locked: RLS is enabled on
    4. `supabase/seed.sql`: levels, periods (P1–P4…), example subjects and 4 events.
    5. `supabase/migrations/20261114000001_own_backend.sql`: switches to the own backend (own `users` table, copies existing accounts with their passwords, removes Supabase-Auth policies/views/functions). It is safe to run twice.
    6. `supabase/migrations/20261118000001_cloudinary_storage.sql`: columns for files stored on Cloudinary. Safe to run twice.
+   7. `supabase/migrations/20261119000001_account_security.sql`: e-mail verification and password-reset codes. Safe to run twice.
 
    *Or with the CLI:* `npx supabase link --project-ref <ref>` then `npx supabase db push`.
 3. **Make yourself admin** (admins can publish events and delete any document). After you sign up once, run:

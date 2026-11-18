@@ -25,7 +25,17 @@ export const config = {
     apiKey: required('CLOUDINARY_API_KEY'),
     apiSecret: required('CLOUDINARY_API_SECRET'),
   },
+  // Google Apps Script mail relay. Optional in development (codes are then printed in the console).
+  mail: {
+    relayUrl: process.env.MAIL_RELAY_URL?.trim() || null,
+    relaySecret: process.env.MAIL_RELAY_SECRET?.trim() || null,
+  },
 };
+
+if (process.env.NODE_ENV === 'production' && (!config.mail.relayUrl || !config.mail.relaySecret)) {
+  // eslint-disable-next-line no-console
+  console.warn('[config] MAIL_RELAY_URL / MAIL_RELAY_SECRET are not set: verification and reset e-mails cannot be sent.');
+}
 
 if (config.jwtSecret.length < 32) {
   // eslint-disable-next-line no-console
