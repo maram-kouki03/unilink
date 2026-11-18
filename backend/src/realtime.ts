@@ -16,7 +16,14 @@ type Ack = (res: { ok: boolean; error?: string }) => void;
  *  conv:<id>  – chat messages (members only)
  */
 export function initRealtime(server: HttpServer) {
-  io = new Server(server, { cors: { origin: '*' } });
+  io = new Server(server, {
+    cors: { origin: '*' },
+    // WebSocket first, HTTP long-polling as fallback (both work behind Render's proxy).
+    transports: ['websocket', 'polling'],
+    // Pings every 25 s keep the connection alive through the proxy.
+    pingInterval: 25_000,
+    pingTimeout: 20_000,
+  });
 
   io.use((socket, next) => {
     const token = socket.handshake.auth?.token;

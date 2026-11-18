@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { uid } from '../auth';
 import { one, query } from '../db';
-import { removeFile, storedPath, uploadImage } from '../files';
+import { removeImage, storeImage, uploadImage } from '../files';
 import { forbidden, likeParam, notFound, parse, uuidParam } from '../http';
 import * as sql from '../sql/items';
 
@@ -42,9 +42,10 @@ const itemSchema = z.object({
 });
 
 itemsRouter.post('/items', uploadImage.single('photo'), async (req, res) => {
-  const photo = req.file;
+  // Validate before uploading so a bad form never leaves a photo on Cloudinary.
+  const b = parse(itemSchema, req.body);
+  const photo = req.file ? await storeImage(req.file) : null;
   try {
-    const b = parse(itemSchema, req.body);
     const row = await one(sql.INSERT_ITEM, [
       uid(req),
       b.mode,
@@ -56,11 +57,11 @@ itemsRouter.post('/items', uploadImage.single('photo'), async (req, res) => {
       b.max_duration,
       b.condition,
       b.location,
-      photo ? storedPath('images', photo) : null,
+      photo?.url ?? null,
     ]);
     res.status(201).json(row);
   } catch (err) {
-    await removeFile(photo);
+    await removeImage(photo);
     throw err;
   }
 });
@@ -95,9 +96,10 @@ const lostSchema = z.object({
 });
 
 itemsRouter.post('/lost-found', uploadImage.single('photo'), async (req, res) => {
-  const photo = req.file;
+  // Validate before uploading so a bad form never leaves a photo on Cloudinary.
+  const b = parse(lostSchema, req.body);
+  const photo = req.file ? await storeImage(req.file) : null;
   try {
-    const b = parse(lostSchema, req.body);
     const row = await one(sql.INSERT_LOST_FOUND, [
       uid(req),
       b.kind,
@@ -106,11 +108,11 @@ itemsRouter.post('/lost-found', uploadImage.single('photo'), async (req, res) =>
       b.location,
       b.happened_at,
       b.description,
-      photo ? storedPath('images', photo) : null,
+      photo?.url ?? null,
     ]);
     res.status(201).json(row);
   } catch (err) {
-    await removeFile(photo);
+    await removeImage(photo);
     throw err;
   }
 });

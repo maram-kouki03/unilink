@@ -50,8 +50,26 @@ export const notFoundHandler: RequestHandler = (_req, res) => {
   res.status(404).json({ error: 'Not found' });
 };
 
-export const errorMiddleware: ErrorRequestHandler = (err, _req, res, _next) => {
+const isDev = process.env.NODE_ENV !== 'production';
+
+/** Print the full error (message, stack, PostgreSQL details) so server problems are visible. */
+function logError(err: any, req: Parameters<ErrorRequestHandler>[1]) {
+  const where = `${req.method} ${req.originalUrl}`;
+  if (!isDev) {
+    // eslint-disable-next-line no-console
+    console.error(`[error] ${where}:`, err?.message ?? err);
+    return;
+  }
+  const pg = err?.code
+    ? { code: err.code, detail: err.detail, hint: err.hint, table: err.table, column: err.column, constraint: err.constraint }
+    : undefined;
+  // eslint-disable-next-line no-console
+  console.error(`\n[error] ${where}\n${err?.stack ?? err}`, pg ? `\n[pg] ${JSON.stringify(pg)}` : '');
+}
+
+export const errorMiddleware: ErrorRequestHandler = (err, req, res, _next) => {
   if (err instanceof HttpError) {
+    if (err.status >= 500) logError(err, req);
     res.status(err.status).json({ error: err.message });
     return;
   }
@@ -69,7 +87,8 @@ export const errorMiddleware: ErrorRequestHandler = (err, _req, res, _next) => {
     res.status(413).json({ error: 'Request body is too large' });
     return;
   }
-  // PostgreSQL errors
+  // PostgreSQL errors (logged in development, they often reveal a schema problem)
+  if (isDev && typeof err?.code === 'string') logError(err, req);
   switch (err?.code) {
     case '23505':
       res.status(409).json({ error: 'This already exists' });
@@ -86,7 +105,6 @@ export const errorMiddleware: ErrorRequestHandler = (err, _req, res, _next) => {
       res.status(400).json({ error: 'Invalid data' });
       return;
   }
-  // eslint-disable-next-line no-console
-  console.error('[error]', err);
+  if (!(isDev && typeof err?.code === 'string')) logError(err, req);
   res.status(500).json({ error: 'Something went wrong on the server' });
 };

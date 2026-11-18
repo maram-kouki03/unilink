@@ -1,13 +1,12 @@
-import { Router, type Request } from 'express';
+import { Router } from 'express';
 import { z } from 'zod';
-import { isAdmin, signFileLink, uid, verifyFileLink } from '../auth';
+import { isAdmin, uid } from '../auth';
 import { one, query } from '../db';
-import { absolutePath, extOf, originalName, removeFile, storedPath, uploadDocument } from '../files';
+import { extOf, originalName, removeDocument, removeStored, signedDocumentUrl, storeDocument, uploadDocument, type ResourceType, type StoredDocument } from '../files';
 import { forbidden, HttpError, likeParam, notFound, parse, strParam, uuidParam } from '../http';
 import * as sql from '../sql/documents';
 
-/** Public router: signed links only. */
-export const filesRouter = Router();
+type DocFile = { file_path: string; storage_resource_type: ResourceType | null; storage_format: string | null; uploader_id: string | null };
 
 /** Every route here requires a signed-in user (requireAuth is applied in index.ts). */
 export const documentsRouter = Router();
@@ -26,24 +25,6 @@ const levelIdParam = (v: unknown) => {
   if (!Number.isInteger(n) || n < 0 || n > 32767) throw notFound('Level not found');
   return n;
 };
-
-const baseUrl = (req: Request) => `${req.protocol}://${req.get('host')}`;
-
-/* ───────────── Signed file access (no Authorization header: used by WebView / downloads) ───────────── */
-
-filesRouter.get('/files/documents/:id', async (req, res) => {
-  const id = uuidParam(req.params.id, 'File not found');
-  if (!verifyFileLink(id, req.query.sig)) throw new HttpError(403, 'This link has expired. Open the document again.');
-  const doc = await one<{ file_path: string; file_name: string }>(sql.DOC_FILE, [id]);
-  const abs = doc && absolutePath(doc.file_path);
-  if (!doc || !abs) throw notFound('File not found');
-  const disposition = req.query.download === '1' ? 'attachment' : 'inline';
-  res.setHeader('Content-Disposition', `${disposition}; filename*=UTF-8''${encodeURIComponent(doc.file_name)}`);
-  res.setHeader('Cache-Control', 'private, max-age=600');
-  res.sendFile(abs, (err) => {
-    if (err && !res.headersSent) res.status(404).json({ error: 'File not found on the server' });
-  });
-});
 
 /* ───────────── Folders ───────────── */
 
@@ -112,8 +93,12 @@ documentsRouter.get('/documents/:id', async (req, res) => {
 
 documentsRouter.get('/documents/:id/link', async (req, res) => {
   const id = uuidParam(req.params.id, 'Document not found');
-  if (!(await one(sql.DOC_FILE, [id]))) throw notFound('Document not found');
-  res.json({ url: `${baseUrl(req)}/files/documents/${id}?sig=${encodeURIComponent(signFileLink(id))}` });
+  const doc = await one<DocFile>(sql.DOC_FILE, [id]);
+  if (!doc) throw notFound('Document not found');
+  // Files uploaded before Cloudinary were on the old server disk and are gone.
+  if (!doc.storage_resource_type) throw notFound('File not found on the server. Please upload it again.');
+  // Signed Cloudinary link, valid 1 hour.
+  res.json({ url: signedDocumentUrl(doc.file_path, doc.storage_resource_type, doc.storage_format) });
 });
 
 /* ───────────── Upload / delete ───────────── */
@@ -130,25 +115,29 @@ const uploadSchema = z.object({
 
 documentsRouter.post('/documents', uploadDocument.single('file'), async (req, res) => {
   const file = req.file;
+  if (!file) throw new HttpError(400, 'file: choose a file to upload');
+  // Validate before uploading so a bad form never leaves a file on Cloudinary.
+  const body = parse(uploadSchema, req.body);
+  const name = originalName(file);
+  const stored: StoredDocument = await storeDocument(file);
   try {
-    if (!file) throw new HttpError(400, 'file: choose a file to upload');
-    const body = parse(uploadSchema, req.body);
-    const name = originalName(file);
     const row = await one<{ id: string }>(sql.INSERT_DOC, [
       body.subjectId,
       body.title,
       body.docType,
       body.academicYear ?? null,
-      storedPath('documents', file),
+      stored.publicId,
       name,
       extOf(name) || 'pdf',
       file.size,
       body.driveUrl ?? null,
       uid(req),
+      stored.resourceType,
+      stored.format,
     ]);
     res.status(201).json(row);
   } catch (err) {
-    await removeFile(file);
+    await removeDocument(stored);
     throw err;
   }
 });
@@ -156,11 +145,11 @@ documentsRouter.post('/documents', uploadDocument.single('file'), async (req, re
 documentsRouter.delete('/documents/:id', async (req, res) => {
   const id = uuidParam(req.params.id, 'Document not found');
   const me = uid(req);
-  const doc = await one<{ file_path: string; uploader_id: string | null }>(sql.DOC_FILE, [id]);
+  const doc = await one<DocFile>(sql.DOC_FILE, [id]);
   if (!doc) throw notFound('Document not found');
   if (doc.uploader_id !== me && !(await isAdmin(me))) throw forbidden('Only the uploader or an admin can delete this document');
   await query(sql.DELETE_DOC, [id]);
-  await removeFile(doc.file_path);
+  if (doc.storage_resource_type) await removeStored(doc.file_path, doc.storage_resource_type, 'authenticated');
   res.json({ ok: true });
 });
 

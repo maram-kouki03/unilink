@@ -11,7 +11,8 @@ const listeners = new Map<string, Set<(payload: any) => void>>();
 
 export function connectSocket(token: string) {
   if (socket) return;
-  socket = io(API_URL, { auth: { token }, transports: ['websocket'], reconnection: true });
+  // WebSocket first; if a network blocks it, fall back to HTTP long-polling.
+  socket = io(API_URL, { auth: { token }, transports: ['websocket', 'polling'], tryAllTransports: true, reconnection: true });
   socket.on('connect', () => {
     rooms.forEach((_count, room) => socket?.emit('join', room));
   });

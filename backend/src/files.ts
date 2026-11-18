@@ -1,30 +1,41 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import multer from 'multer';
+import { v2 as cloudinary, type UploadApiOptions, type UploadApiResponse } from 'cloudinary';
 import { config } from './config';
 import { HttpError } from './http';
 
-for (const dir of [config.documentsDir, config.imagesDir]) fs.mkdirSync(dir, { recursive: true });
+/**
+ * Files live on Cloudinary (the server disk is wiped on every restart on Render).
+ *  - documents: private (type "authenticated") in unilink/documents, opened with a signed link valid 1 hour
+ *  - images:    public in unilink/images, the full https URL is stored in photo_path
+ */
+cloudinary.config({
+  cloud_name: config.cloudinary.cloudName,
+  api_key: config.cloudinary.apiKey,
+  api_secret: config.cloudinary.apiSecret,
+  secure: true,
+});
+
+const DOC_FOLDER = 'unilink/documents';
+const IMAGE_FOLDER = 'unilink/images';
+const SIGNED_LINK_SECONDS = 60 * 60;
 
 const DOC_EXTS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'png', 'jpg', 'jpeg'];
+/** Documents that Cloudinary stores as images; everything else (PDF, Office) is stored as "raw". */
+const DOC_IMAGE_EXTS = ['png', 'jpg', 'jpeg'];
 const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp'];
+
+export type ResourceType = 'image' | 'raw';
 
 export const extOf = (name: string) => (path.extname(name).slice(1) || '').toLowerCase();
 
 /** Multer decodes file names as latin1; React Native sends UTF-8. */
 export const originalName = (file: Express.Multer.File) => Buffer.from(file.originalname, 'latin1').toString('utf8');
 
-function storage(dir: string) {
-  return multer.diskStorage({
-    destination: dir,
-    filename: (_req, file, cb) => cb(null, `${randomUUID()}.${extOf(originalName(file)) || 'bin'}`),
-  });
-}
-
-/** Private documents: uploads/documents, 50 MB. */
+/** Private documents, 50 MB, kept in memory then sent to Cloudinary. */
 export const uploadDocument = multer({
-  storage: storage(config.documentsDir),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, cb) => {
     if (DOC_EXTS.includes(extOf(originalName(file)))) cb(null, true);
@@ -32,9 +43,9 @@ export const uploadDocument = multer({
   },
 });
 
-/** Public images: uploads/images, 5 MB. */
+/** Public images, 5 MB, kept in memory then sent to Cloudinary. */
 export const uploadImage = multer({
-  storage: storage(config.imagesDir),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, cb) => {
     const okExt = IMAGE_EXTS.includes(extOf(originalName(file)));
@@ -44,18 +55,74 @@ export const uploadImage = multer({
   },
 });
 
-/** Path stored in the database for an uploaded file, e.g. "images/<uuid>.jpg". */
-export const storedPath = (kind: 'documents' | 'images', file: Express.Multer.File) => `${kind}/${file.filename}`;
-
-/** Absolute path of a stored file, refusing anything outside UPLOAD_DIR. */
-export function absolutePath(stored: string): string | null {
-  const abs = path.resolve(config.uploadDir, stored);
-  return abs.startsWith(config.uploadDir + path.sep) ? abs : null;
+function uploadBuffer(buffer: Buffer, options: UploadApiOptions): Promise<UploadApiResponse> {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(options, (err, result) => {
+      if (result && !err) return resolve(result);
+      // eslint-disable-next-line no-console
+      console.error('[cloudinary] upload failed:', err?.message ?? err);
+      if (/file size too large/i.test(err?.message ?? '')) return reject(new HttpError(413, 'File is too large'));
+      reject(new HttpError(502, 'The file could not be stored. Please try again.'));
+    });
+    stream.end(buffer);
+  });
 }
 
-/** Delete a stored file (or an uploaded multer file) and ignore errors. */
-export async function removeFile(fileOrStored: Express.Multer.File | string | null | undefined) {
-  if (!fileOrStored) return;
-  const abs = typeof fileOrStored === 'string' ? absolutePath(fileOrStored) : fileOrStored.path;
-  if (abs) await fs.promises.unlink(abs).catch(() => undefined);
+export type StoredDocument = { publicId: string; resourceType: ResourceType; format: string | null };
+
+/** Upload a private document. */
+export async function storeDocument(file: Express.Multer.File): Promise<StoredDocument> {
+  const ext = extOf(originalName(file));
+  const resourceType: ResourceType = DOC_IMAGE_EXTS.includes(ext) ? 'image' : 'raw';
+  const id = randomUUID();
+  const res = await uploadBuffer(file.buffer, {
+    resource_type: resourceType,
+    type: 'authenticated',
+    // Raw files keep their extension in the public_id; images get it as "format".
+    public_id: resourceType === 'raw' ? `${DOC_FOLDER}/${id}.${ext}` : `${DOC_FOLDER}/${id}`,
+    asset_folder: DOC_FOLDER,
+    overwrite: false,
+  });
+  return { publicId: res.public_id, resourceType, format: res.format || null };
 }
+
+export type StoredImage = { publicId: string; url: string };
+
+/** Upload a public image (item / lost & found photo). */
+export async function storeImage(file: Express.Multer.File): Promise<StoredImage> {
+  const res = await uploadBuffer(file.buffer, {
+    resource_type: 'image',
+    type: 'upload',
+    public_id: `${IMAGE_FOLDER}/${randomUUID()}`,
+    asset_folder: IMAGE_FOLDER,
+    overwrite: false,
+  });
+  return { publicId: res.public_id, url: res.secure_url };
+}
+
+/** Signed link to a private document, valid 1 hour. */
+export function signedDocumentUrl(publicId: string, resourceType: ResourceType, format: string | null): string {
+  return cloudinary.utils.private_download_url(publicId, format ?? '', {
+    resource_type: resourceType,
+    type: 'authenticated',
+    expires_at: Math.floor(Date.now() / 1000) + SIGNED_LINK_SECONDS,
+    attachment: false,
+  });
+}
+
+/** Delete a file on Cloudinary. Never throws (a leftover file must not break the request). */
+export async function removeStored(publicId: string | null | undefined, resourceType: ResourceType, type: 'authenticated' | 'upload') {
+  if (!publicId) return;
+  try {
+    await cloudinary.uploader.destroy(publicId, { resource_type: resourceType, type, invalidate: true });
+  } catch (err: any) {
+    // eslint-disable-next-line no-console
+    console.error(`[cloudinary] could not delete ${publicId}:`, err?.message ?? err);
+  }
+}
+
+export const removeDocument = (doc: StoredDocument | null | undefined) =>
+  doc ? removeStored(doc.publicId, doc.resourceType, 'authenticated') : Promise.resolve();
+
+export const removeImage = (img: StoredImage | null | undefined) =>
+  img ? removeStored(img.publicId, 'image', 'upload') : Promise.resolve();

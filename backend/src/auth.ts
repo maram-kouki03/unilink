@@ -15,7 +15,6 @@ declare global {
 }
 
 const SESSION_AUDIENCE = 'unilink-session';
-const FILE_AUDIENCE = 'unilink-file';
 
 export function signToken(userId: string): string {
   return jwt.sign({}, config.jwtSecret, { subject: userId, audience: SESSION_AUDIENCE, expiresIn: '30d' });
@@ -58,18 +57,3 @@ export const requireAdmin: RequestHandler = async (req, _res, next) => {
   if (!(await isAdmin(uid(req)))) throw new HttpError(403, 'Only admins can do this');
   next();
 };
-
-/** Short-lived signature for opening a private document without an Authorization header. */
-export function signFileLink(documentId: string): string {
-  return jwt.sign({ doc: documentId }, config.jwtSecret, { audience: FILE_AUDIENCE, expiresIn: '1h' });
-}
-
-export function verifyFileLink(documentId: string, sig: unknown): boolean {
-  if (typeof sig !== 'string' || !sig) return false;
-  try {
-    const payload = jwt.verify(sig, config.jwtSecret, { audience: FILE_AUDIENCE });
-    return typeof payload === 'object' && payload.doc === documentId;
-  } catch {
-    return false;
-  }
-}

@@ -13,7 +13,12 @@ function buildPoolConfig(raw: string) {
   return {
     connectionString: url.toString(),
     ssl: local ? false : { rejectUnauthorized: false },
-    max: 10,
+    // Small pool: Render free plan (512 MB) + Supabase pooler connection limits.
+    max: 5,
+    idleTimeoutMillis: 30_000,
+    // Fail with a real error instead of letting requests hang when the database is unreachable.
+    connectionTimeoutMillis: 15_000,
+    keepAlive: true,
   };
 }
 

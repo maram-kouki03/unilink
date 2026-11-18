@@ -105,14 +105,18 @@ export const DOC_BY_ID = `
     from public.documents d ${DOC_JOINS}
    where d.id = $1`;
 
-export const DOC_FILE = `select id, file_path, file_name, file_ext, uploader_id from public.documents where id = $1`;
+export const DOC_FILE = `
+  select id, file_path, file_name, file_ext, uploader_id, storage_resource_type, storage_format
+    from public.documents where id = $1`;
 
 /* ── writes ── */
 
+/** file_path = Cloudinary public_id, $11 storage_resource_type, $12 storage_format */
 export const INSERT_DOC = `
   insert into public.documents
-    (subject_id, title, doc_type, academic_year, file_path, file_name, file_ext, size_bytes, drive_url, uploader_id)
-  values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    (subject_id, title, doc_type, academic_year, file_path, file_name, file_ext, size_bytes, drive_url, uploader_id,
+     storage_resource_type, storage_format)
+  values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
   returning id`;
 
 export const DELETE_DOC = `delete from public.documents where id = $1`;
