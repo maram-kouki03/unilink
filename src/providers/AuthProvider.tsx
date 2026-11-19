@@ -16,12 +16,15 @@ type AuthCtx = {
   profile: Profile | null;
   loading: boolean;
   signIn: (email: string, password: string, remember?: boolean) => Promise<void>;
-  /** Creates the account and e-mails a 6-digit code; the session starts after verifyEmail. */
+  /** Saves a pending sign-up and e-mails a 6-digit code; the account is created by verifyEmail. */
   signUp: (p: { fullName: string; email: string; password: string; level: LevelCode }) => Promise<{ email: string; codeSent: boolean }>;
   verifyEmail: (email: string, code: string) => Promise<void>;
   resendCode: (email: string, purpose: CodePurpose) => Promise<void>;
   forgotPassword: (email: string) => Promise<void>;
-  resetPassword: (email: string, code: string, password: string) => Promise<void>;
+  /** Checks the reset code and returns a short-lived resetToken (kept in memory only, never stored). */
+  verifyResetCode: (email: string, code: string) => Promise<string>;
+  /** Saves the new password and starts the session. */
+  resetPassword: (resetToken: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 };
@@ -129,10 +132,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!isAllowedEmail(email)) throw domainError();
         await api('/auth/forgot-password', { body: { email: normEmail(email) } });
       },
-      async resetPassword(email, code, password) {
+      async verifyResetCode(email, code) {
+        const res = await api<{ resetToken: string }>('/auth/verify-reset-code', { body: { email: normEmail(email), code } });
+        return res.resetToken;
+      },
+      async resetPassword(resetToken, password) {
         if (!passwordOk(password)) throw passwordError();
         const res = await api<{ token: string; profile: Profile }>('/auth/reset-password', {
-          body: { email: normEmail(email), code, password },
+          body: { resetToken, password },
         });
         await AsyncStorage.setItem(REMEMBER_KEY, '1');
         await startSession(res.token, res.profile);

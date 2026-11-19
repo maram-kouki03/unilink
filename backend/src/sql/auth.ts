@@ -2,17 +2,18 @@
 
 export const USER_EXISTS = `select 1 from public.users where id = $1`;
 
-export const USER_BY_EMAIL = `select id, email, password_hash, email_verified from public.users where email = $1`;
+export const USER_BY_EMAIL = `select id, email, password_hash from public.users where email = $1`;
 
+export const USER_BY_ID = `select id, email, password_hash from public.users where id = $1`;
+
+/** Accounts are created only once the e-mail code was entered. $1 email, $2 bcrypt hash */
 export const INSERT_USER = `
-  insert into public.users (email, password_hash)
-  values ($1, $2)
+  insert into public.users (email, password_hash, email_verified)
+  values ($1, $2, true)
   returning id, email`;
 
-export const MARK_EMAIL_VERIFIED = `update public.users set email_verified = true where id = $1`;
-
-/** Reset password: proving access to the inbox also confirms the e-mail. $1 user, $2 bcrypt hash */
-export const SET_PASSWORD = `update public.users set password_hash = $2, email_verified = true where id = $1`;
+/** $1 user, $2 bcrypt hash */
+export const SET_PASSWORD = `update public.users set password_hash = $2 where id = $1`;
 
 export const USERNAME_TAKEN = `select 1 from public.profiles where username = $1`;
 

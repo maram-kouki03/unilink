@@ -14,7 +14,8 @@ export default function AuthLayout() {
       {/* Reachable while logged out: the AuthGate lets every (auth) screen through. */}
       <Stack.Screen name="verify-email" />
       <Stack.Screen name="forgot-password" />
-      <Stack.Screen name="reset-password" />
+      <Stack.Screen name="reset-code" />
+      <Stack.Screen name="new-password" />
     </Stack>
   );
 }

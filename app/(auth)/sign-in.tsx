@@ -4,7 +4,6 @@ import { router } from 'expo-router';
 import { Logo } from '@/components/Illustrations';
 import { Button, ErrorNote, Field, IconButton, Row, Screen, Txt } from '@/components/ui';
 import { Icon } from '@/components/Icon';
-import { ApiError } from '@/lib/api';
 import { useAuth } from '@/providers/AuthProvider';
 import { colors } from '@/theme';
 
@@ -23,13 +22,7 @@ export default function SignIn() {
     try {
       await signIn(email, password, remember);
     } catch (e) {
-      // Right password but the e-mail is not confirmed yet: the server just sent a fresh code.
-      if (e instanceof ApiError && e.data.needsVerification) {
-        const to = typeof e.data.email === 'string' ? e.data.email : email.trim().toLowerCase();
-        router.push({ pathname: '/verify-email', params: { email: to } });
-      } else {
-        setError(e);
-      }
+      setError(e);
     } finally {
       setBusy(false);
     }

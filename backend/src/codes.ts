@@ -3,10 +3,11 @@ import type { PoolClient } from 'pg';
 import { config } from './config';
 import { one, query, transaction } from './db';
 import { HttpError } from './http';
-import { sendCode, type CodePurpose } from './mail';
+import { sendCode, type CodePurpose as MailPurpose } from './mail';
 import * as sql from './sql/codes';
 
-export type { CodePurpose };
+/** email_codes only holds password-reset codes (sign-up codes live in pending_signups, see pending.ts). */
+export type CodePurpose = Extract<MailPurpose, 'reset'>;
 
 const CODE_TTL_SECONDS = 15 * 60;
 const MAX_ATTEMPTS = 5;

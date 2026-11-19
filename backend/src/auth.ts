@@ -1,4 +1,5 @@
 import type { Request, RequestHandler } from 'express';
+import { createHmac } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { config } from './config';
 import { one } from './db';
@@ -28,6 +29,42 @@ export function verifyToken(token: string): string | null {
   } catch {
     return null;
   }
+}
+
+/* ───────────── Password-reset token (after the reset code was checked) ───────────── */
+
+const RESET_PURPOSE = 'reset';
+
+/**
+ * Short fingerprint of the current password hash: once the password changes,
+ * every reset token issued before stops working (so a token is single-use).
+ */
+const passwordStamp = (passwordHash: string) =>
+  createHmac('sha256', config.jwtSecret).update(`reset-stamp:${passwordHash}`).digest('hex').slice(0, 24);
+
+export function signResetToken(userId: string, passwordHash: string): string {
+  return jwt.sign({ purpose: RESET_PURPOSE, ps: passwordStamp(passwordHash) }, config.jwtSecret, {
+    subject: userId,
+    expiresIn: '10m',
+  });
+}
+
+/** Returns the user id if the reset token is valid, not expired and issued for the current password. */
+export async function verifyResetToken(
+  token: string,
+  currentPasswordHash: (userId: string) => Promise<string | null>,
+): Promise<string | null> {
+  let payload: jwt.JwtPayload | string;
+  try {
+    payload = jwt.verify(token, config.jwtSecret);
+  } catch {
+    return null; // bad signature or expired
+  }
+  if (typeof payload !== 'object' || payload.purpose !== RESET_PURPOSE || typeof payload.sub !== 'string') return null;
+  if (payload.aud !== undefined) return null; // never accept a session token here
+  const hash = await currentPasswordHash(payload.sub);
+  if (!hash || payload.ps !== passwordStamp(hash)) return null; // password already changed with this token
+  return payload.sub;
 }
 
 /** The signed-in user's id (only call after requireAuth). */

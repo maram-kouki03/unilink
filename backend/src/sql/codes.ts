@@ -1,4 +1,4 @@
-// E-mail codes (verify e-mail, reset password). Only an HMAC of the code is stored.
+// E-mail codes for password reset. Only an HMAC of the code is stored.
 
 /** $1 user: how many codes were created in the last minute / hour, and seconds until the next one is allowed. */
 export const CODE_RATE = `

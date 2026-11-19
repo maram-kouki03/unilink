@@ -17,7 +17,7 @@ export default function ForgotPassword() {
     setBusy(true);
     try {
       await forgotPassword(email);
-      router.push({ pathname: '/reset-password', params: { email: email.trim().toLowerCase() } });
+      router.push({ pathname: '/reset-code', params: { email: email.trim().toLowerCase() } });
     } catch (e) {
       setError(e);
     } finally {

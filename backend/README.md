@@ -37,20 +37,22 @@ Before the first start, the database must have the migrations `supabase/migratio
 
 ## Account security
 
-- Sign-up creates the account with `email_verified = false` and e-mails a 6-digit code. The account can log in only after `POST /auth/verify-email`.
-- Codes: `crypto.randomInt`, stored as HMAC-SHA256 (key `JWT_SECRET`) in `email_codes`, valid 15 minutes, 5 wrong attempts max, only the latest code of each purpose works. Max 1 new code per 60 s and 10 per hour per account.
+- Sign-up writes **nothing** to `users`: the data (bcrypt hash, name, level) waits in `pending_signups` with a 6-digit code. `POST /auth/verify-email` creates the `users` + `profiles` rows in one transaction and deletes the pending row. A new sign-up with the same e-mail replaces the pending one; pending rows older than 24 h are deleted.
+- Codes: `crypto.randomInt`, stored as HMAC-SHA256 (key `JWT_SECRET`), valid 15 minutes, 5 wrong attempts max, only the latest code works. Max 1 new code per 60 s and 10 per hour per e-mail. Sign-up codes live in `pending_signups`, reset codes in `email_codes`.
+- Password reset: the code is traded for a `resetToken` (JWT, `{ sub, purpose: "reset" }`, 10 min, single-use: it stops working once the password changes).
 - Password rule (server and app): 8+ characters, uppercase, lowercase, number, special character.
 
 | Endpoint | Body | Answer |
 |---|---|---|
-| `POST /auth/signup` | `fullName, email, password, level` | `201 { needsVerification: true, email, codeSent }` |
+| `POST /auth/signup` | `fullName, email, password, level` | `201 { needsVerification: true, email, codeSent }`, `409` if the account exists |
 | `POST /auth/verify-email` | `email, code` | `{ token, profile }` |
 | `POST /auth/resend-code` | `email, purpose: "verify" \| "reset"` | `{ ok, message }` (429 `{ error, retryAfter }` if too soon) |
-| `POST /auth/login` | `email, password` | `{ token, profile }`, or `403 { error: "Please confirm your e-mail", needsVerification: true, email }` (a fresh code is sent) |
+| `POST /auth/login` | `email, password` | `{ token, profile }` |
 | `POST /auth/forgot-password` | `email` | always `200 { ok, message }` |
-| `POST /auth/reset-password` | `email, code, password` | `{ token, profile }` |
+| `POST /auth/verify-reset-code` | `email, code` | `{ resetToken }` |
+| `POST /auth/reset-password` | `resetToken, password` | `{ token, profile }` |
 
-Migration: `supabase/migrations/20261119000001_account_security.sql` (existing accounts are marked verified).
+Migrations: `20261119000001_account_security.sql`, then `20261119000002_pending_signups.sql`.
 
 ## E-mails (Google Apps Script relay)
 

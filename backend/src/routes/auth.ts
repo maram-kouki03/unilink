@@ -2,21 +2,22 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { randomInt } from 'node:crypto';
 import { z } from 'zod';
-import { requireAuth, signToken, uid } from '../auth';
+import { requireAuth, signResetToken, signToken, uid, verifyResetToken } from '../auth';
 import { config } from '../config';
-import { one, query, transaction } from '../db';
+import { type Db, one, query } from '../db';
 import { consumeCode, issueCode, tryIssueCode } from '../codes';
+import { cleanupPending, consumePendingCode, resendPendingCode, savePendingSignup } from '../pending';
 import { HttpError, notFound, parse } from '../http';
 import {
   ENSURE_PROFILE,
   INSERT_PROFILE,
   INSERT_USER,
-  MARK_EMAIL_VERIFIED,
   PROFILE_BY_ID,
   PROFILE_STATS,
   SET_PASSWORD,
   UPDATE_PROFILE,
   USER_BY_EMAIL,
+  USER_BY_ID,
   USERNAME_TAKEN,
 } from '../sql/auth';
 import { ACTIVITY_ITEMS } from '../sql/items';
@@ -65,7 +66,7 @@ const loginSchema = z.object({
 const DUMMY_HASH = bcrypt.hashSync('unilink-dummy-password', 10);
 const LOGIN_ERROR = 'Wrong e-mail or password';
 
-type UserRow = { id: string; email: string; password_hash: string; email_verified: boolean };
+type UserRow = { id: string; email: string; password_hash: string };
 
 /** { token, profile }: the answer of login, verify-email and reset-password. */
 async function sessionFor(user: { id: string; email: string }) {
@@ -74,48 +75,60 @@ async function sessionFor(user: { id: string; email: string }) {
   return { token: signToken(user.id), profile };
 }
 
+/** A free username from the e-mail (name@… → name, or name1234 when taken). */
+async function freeUsername(emailAddress: string, db: Db) {
+  const base = emailAddress.split('@')[0].replace(/[^a-z0-9._-]/g, '') || 'student';
+  let username = base;
+  for (let i = 0; i < 10 && (await one(USERNAME_TAKEN, [username], db)); i++) {
+    username = `${base}${randomInt(1000, 10000)}`;
+  }
+  return username;
+}
+
+const ACCOUNT_EXISTS = 'An account with this e-mail already exists';
+
+/* ───────────── Sign-up: nothing is written to users until the code is entered ───────────── */
+
 authRouter.post('/auth/signup', async (req, res) => {
   const body = parse(signupSchema, req.body);
   if (!body.email.endsWith(`@${config.allowedDomain}`)) {
     throw new HttpError(400, `Only @${config.allowedDomain} e-mail addresses can join Unilink`);
   }
+  await cleanupPending();
+  if (await one(USER_BY_EMAIL, [body.email])) throw new HttpError(409, ACCOUNT_EXISTS);
+
   const passwordHash = await bcrypt.hash(body.password, 10);
-
-  const user = await transaction(async (db) => {
-    if (await one(USER_BY_EMAIL, [body.email], db)) throw new HttpError(409, 'An account with this e-mail already exists');
-
-    const base = body.email.split('@')[0].replace(/[^a-z0-9._-]/g, '') || 'student';
-    let username = base;
-    for (let i = 0; i < 10 && (await one(USERNAME_TAKEN, [username], db)); i++) {
-      username = `${base}${randomInt(1000, 10000)}`;
-    }
-
-    // email_verified defaults to false: the account works only after the code is entered.
-    const created = await one<{ id: string; email: string }>(INSERT_USER, [body.email, passwordHash], db);
-    if (!created) throw new Error('User insert failed');
-    await one(INSERT_PROFILE, [created.id, created.email, body.fullName, username, body.level], db);
-    return created;
-  });
-
-  // If the e-mail fails, the account still exists: the user can tap "Resend code".
-  const codeSent = await tryIssueCode(user, 'verify');
-  res.status(201).json({ needsVerification: true, email: user.email, codeSent });
+  // Replaces any earlier pending sign-up with this e-mail. If the e-mail fails, the user can tap "Resend code".
+  const codeSent = await savePendingSignup({ email: body.email, passwordHash, fullName: body.fullName, level: body.level });
+  res.status(201).json({ needsVerification: true, email: body.email, codeSent });
 });
 
 authRouter.post('/auth/verify-email', async (req, res) => {
   const body = parse(z.object({ email, code }), req.body);
-  const user = await one<UserRow>(USER_BY_EMAIL, [body.email]);
-  await consumeCode(user?.id ?? null, 'verify', body.code, (db) => db.query(MARK_EMAIL_VERIFIED, [user!.id]));
-  res.json(await sessionFor(user!));
+  await cleanupPending();
+  const user = await consumePendingCode(body.email, body.code, async (db, pending) => {
+    if (await one(USER_BY_EMAIL, [pending.email], db)) throw new HttpError(409, ACCOUNT_EXISTS);
+    const created = await one<{ id: string; email: string }>(INSERT_USER, [pending.email, pending.password_hash], db);
+    if (!created) throw new Error('User insert failed');
+    const username = await freeUsername(created.email, db);
+    await one(INSERT_PROFILE, [created.id, created.email, pending.full_name, username, pending.level], db);
+    return created;
+  });
+  res.json(await sessionFor(user));
 });
 
 const GENERIC_SENT = 'If an account exists for this e-mail, we sent it a 6-digit code.';
 
 authRouter.post('/auth/resend-code', async (req, res) => {
   const body = parse(z.object({ email, purpose: z.enum(['verify', 'reset']) }), req.body);
-  const user = await one<UserRow>(USER_BY_EMAIL, [body.email]);
-  // Unknown account, or nothing to verify: same answer, nothing sent.
-  if (user && !(body.purpose === 'verify' && user.email_verified)) await issueCode(user, body.purpose);
+  if (body.purpose === 'verify') {
+    await cleanupPending();
+    await resendPendingCode(body.email);
+  } else {
+    const user = await one<UserRow>(USER_BY_EMAIL, [body.email]);
+    if (user) await issueCode(user, 'reset');
+  }
+  // Unknown e-mail: same answer, nothing sent.
   res.json({ ok: true, message: GENERIC_SENT });
 });
 
@@ -125,15 +138,10 @@ authRouter.post('/auth/login', async (req, res) => {
   const hash = user?.password_hash?.startsWith('$2') ? user.password_hash : DUMMY_HASH;
   const ok = await bcrypt.compare(body.password, hash);
   if (!user || !ok || hash === DUMMY_HASH) throw new HttpError(401, LOGIN_ERROR);
-
-  if (!user.email_verified) {
-    // Fresh code (skipped silently if one was sent less than 60 s ago: the previous one still works).
-    await tryIssueCode(user, 'verify');
-    throw new HttpError(403, 'Please confirm your e-mail', { needsVerification: true, email: user.email });
-  }
-
   res.json(await sessionFor(user));
 });
+
+/* ───────────── Password reset: e-mail → code → resetToken → new password ───────────── */
 
 authRouter.post('/auth/forgot-password', async (req, res) => {
   const body = parse(z.object({ email }), req.body);
@@ -143,12 +151,25 @@ authRouter.post('/auth/forgot-password', async (req, res) => {
   if (user) await tryIssueCode(user, 'reset');
 });
 
-authRouter.post('/auth/reset-password', async (req, res) => {
-  const body = parse(z.object({ email, code, password }), req.body);
+/** Checks the reset code (5 attempts, 15 min) and trades it for a 10-minute reset token. */
+authRouter.post('/auth/verify-reset-code', async (req, res) => {
+  const body = parse(z.object({ email, code }), req.body);
   const user = await one<UserRow>(USER_BY_EMAIL, [body.email]);
+  await consumeCode(user?.id ?? null, 'reset', body.code, async () => undefined);
+  res.json({ resetToken: signResetToken(user!.id, user!.password_hash) });
+});
+
+const INVALID_RESET = 'This reset link has expired. Please ask for a new code.';
+
+authRouter.post('/auth/reset-password', async (req, res) => {
+  const body = parse(z.object({ resetToken: z.string().min(1, 'required').max(2000), password }), req.body);
+  const userId = await verifyResetToken(body.resetToken, async (id) => (await one<UserRow>(USER_BY_ID, [id]))?.password_hash ?? null);
+  if (!userId) throw new HttpError(400, INVALID_RESET);
   const passwordHash = await bcrypt.hash(body.password, 10);
-  await consumeCode(user?.id ?? null, 'reset', body.code, (db) => db.query(SET_PASSWORD, [user!.id, passwordHash]));
-  res.json(await sessionFor(user!));
+  await query(SET_PASSWORD, [userId, passwordHash]);
+  const user = await one<UserRow>(USER_BY_ID, [userId]);
+  if (!user) throw new HttpError(400, INVALID_RESET);
+  res.json(await sessionFor(user));
 });
 
 
