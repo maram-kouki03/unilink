@@ -1,6 +1,6 @@
 import type { Server as HttpServer } from 'node:http';
 import { Server } from 'socket.io';
-import { verifyToken } from './auth';
+import { verifySession } from './auth';
 import { one } from './db';
 import { isUuid } from './http';
 import { IS_CONVERSATION_MEMBER } from './sql/realtime';
@@ -25,12 +25,14 @@ export function initRealtime(server: HttpServer) {
     pingTimeout: 20_000,
   });
 
-  io.use((socket, next) => {
+  io.use(async (socket, next) => {
     const token = socket.handshake.auth?.token;
-    const userId = typeof token === 'string' ? verifyToken(token) : null;
-    if (!userId) return next(new Error('unauthorized'));
-    socket.data.userId = userId;
-    next();
+    try {
+      socket.data.userId = await verifySession(typeof token === 'string' ? token : '');
+      next();
+    } catch (err: any) {
+      next(new Error(err?.status === 403 ? 'suspended' : 'unauthorized'));
+    }
   });
 
   io.on('connection', (socket) => {
@@ -67,4 +69,9 @@ export function initRealtime(server: HttpServer) {
 
 export function emitTo(room: string, event: string, payload: unknown) {
   io?.to(room).emit(event, payload);
+}
+
+/** Close every live socket of a user (sign-out everywhere, ban, account deleted). */
+export function disconnectUser(userId: string) {
+  io?.in(`user:${userId}`).disconnectSockets(true);
 }

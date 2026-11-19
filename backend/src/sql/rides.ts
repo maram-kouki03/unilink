@@ -4,6 +4,7 @@
 const RIDE_FEED = `
   select r.id, r.driver_id, r.scope, r.from_place, r.to_place, r.departure_at, r.seats_total,
          r.price_tnd, r.recurring, r.note, r.car, r.from_lat, r.from_lng, r.to_lat, r.to_lng, r.created_at,
+         r.cancelled, r.hidden_at,
          p.full_name as driver_name,
          p.level     as driver_level,
          (select round(avg(rr.stars)::numeric, 1)::float
@@ -16,29 +17,31 @@ const RIDE_FEED = `
                   where b.ride_id = r.id and b.passenger_id = $1 and b.status = 'confirmed') as booked_by_me
     from public.rides r
     join public.profiles p on p.id = r.driver_id
-   where not r.cancelled`;
+   where true`;
 
 /** $2 scope, $3 escaped search|null */
 export const LIST_RIDES = `
   ${RIDE_FEED}
+     and not r.cancelled and r.hidden_at is null
      and r.scope = $2
      and r.departure_at >= now() - interval '30 minutes'
-     and ($3::text is null or r.from_place ilike '%' || $3 || '%')
+     and ($3::text is null or r.from_place ilike '%' || $3 || '%' or r.to_place ilike '%' || $3 || '%')
    order by r.departure_at
    limit 50`;
 
-export const RIDES_OFFERED = `${RIDE_FEED} and r.driver_id = $1 order by r.departure_at desc`;
+export const RIDES_OFFERED = `${RIDE_FEED} and not r.cancelled and r.driver_id = $1 order by r.departure_at desc`;
 
 export const RIDES_BOOKED = `
   ${RIDE_FEED}
+     and not r.cancelled
      and exists (select 1 from public.ride_bookings b
                   where b.ride_id = r.id and b.passenger_id = $1 and b.status = 'confirmed')
    order by r.departure_at desc`;
 
 export const ACTIVITY_RIDES = RIDES_OFFERED;
 
-/** $2 ride id */
-export const RIDE_BY_ID = `${RIDE_FEED} and r.id = $2`;
+/** $2 ride id. Cancelled rides stay readable (passengers open them from notifications); hidden ones only for the driver. */
+export const RIDE_BY_ID = `${RIDE_FEED} and r.id = $2 and (r.hidden_at is null or r.driver_id = $1)`;
 
 export const INSERT_RIDE = `
   insert into public.rides
@@ -53,7 +56,7 @@ export const INSERT_RIDE = `
 export const LOCK_RIDE = `
   select id, driver_id, from_place, departure_at, seats_total
     from public.rides
-   where id = $1 and not cancelled
+   where id = $1 and not cancelled and hidden_at is null
    for update`;
 
 /** Seats already taken by OTHER passengers. $1 ride, $2 me */

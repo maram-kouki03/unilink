@@ -3,6 +3,9 @@
 const EVENT_FEED = `
   select e.*,
          (select count(*)::int from public.event_registrations er where er.event_id = e.id) as going,
+         case when e.seats is null then null
+              else greatest(e.seats - (select count(*)::int from public.event_registrations er where er.event_id = e.id), 0)
+         end as seats_left,
          exists (select 1 from public.event_registrations er where er.event_id = e.id and er.user_id = $1) as registered_by_me
     from public.events e`;
 
@@ -17,15 +20,22 @@ export const LIST_EVENTS = `
 export const EVENT_BY_ID = `${EVENT_FEED} where e.id = $2`;
 
 export const INSERT_EVENT = `
-  insert into public.events (title, category, organizer, starts_at, ends_at, location, description, created_by)
-  values ($1, $2, $3, $4, $5, $6, $7, $8)
+  insert into public.events (title, category, organizer, starts_at, ends_at, location, description, created_by, seats)
+  values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
   returning id`;
 
-export const EVENT_EXISTS = `select 1 from public.events where id = $1`;
+/** Locks the event row so two students cannot take the last seat at the same time. */
+export const LOCK_EVENT = `select id, seats, starts_at from public.events where id = $1 for update`;
+
+export const REGISTERED_COUNT = `select count(*)::int as count from public.event_registrations where event_id = $1`;
 
 /** $1 event, $2 me */
 export const UNREGISTER = `delete from public.event_registrations where event_id = $1 and user_id = $2 returning event_id`;
 
+export const IS_REGISTERED = `select 1 from public.event_registrations where event_id = $1 and user_id = $2`;
+
 export const REGISTER = `
   insert into public.event_registrations (event_id, user_id) values ($1, $2)
   on conflict do nothing`;
+
+export const DELETE_EVENT = `delete from public.events where id = $1 returning id`;

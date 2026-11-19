@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { uid } from '../auth';
+import { isAdmin, uid } from '../auth';
+import { deleteContent } from '../content';
 import { one, query } from '../db';
 import { removeImage, storeImage, uploadImage } from '../files';
 import { forbidden, likeParam, notFound, parse, uuidParam } from '../http';
@@ -15,8 +16,8 @@ const text = (max: number) => z.preprocess(blank, z.string().trim().max(max).nul
 /* ───────────── Rents & Borrow ───────────── */
 
 itemsRouter.get('/items', async (req, res) => {
-  const { mode } = parse(z.object({ mode: z.enum(['rent', 'borrow']).default('rent') }), req.query);
-  res.json(await query(sql.LIST_ITEMS, [mode, likeParam(req.query.q)]));
+  const { mode, q } = parse(z.object({ mode: z.enum(['rent', 'borrow']).default('rent'), q: z.string().optional() }), req.query);
+  res.json(await query(sql.LIST_ITEMS, [mode, likeParam(q)]));
 });
 
 itemsRouter.get('/items/mine', async (req, res) => {
@@ -24,7 +25,7 @@ itemsRouter.get('/items/mine', async (req, res) => {
 });
 
 itemsRouter.get('/items/:id', async (req, res) => {
-  const item = await one(sql.ITEM_BY_ID, [uuidParam(req.params.id, 'Item not found')]);
+  const item = await one(sql.ITEM_BY_ID, [uuidParam(req.params.id, 'Item not found'), uid(req)]);
   if (!item) throw notFound('Item not found');
   res.json(item);
 });
@@ -66,6 +67,17 @@ itemsRouter.post('/items', uploadImage.single('photo'), async (req, res) => {
   }
 });
 
+itemsRouter.delete('/items/:id', async (req, res) => {
+  const id = uuidParam(req.params.id, 'Item not found');
+  const me = uid(req);
+  const item = await one<{ owner_id: string }>(sql.ITEM_OWNER, [id]);
+  if (!item) throw notFound('Item not found');
+  if (item.owner_id !== me && !(await isAdmin(me))) throw forbidden('Only the owner or an admin can delete this item');
+  // Also deletes the photo on Cloudinary.
+  await deleteContent('item', id, me);
+  res.json({ ok: true });
+});
+
 itemsRouter.patch('/items/:id/availability', async (req, res) => {
   const id = uuidParam(req.params.id, 'Item not found');
   const { available } = parse(z.object({ available: z.boolean() }), req.body);
@@ -78,8 +90,8 @@ itemsRouter.patch('/items/:id/availability', async (req, res) => {
 /* ───────────── Lost & Found ───────────── */
 
 itemsRouter.get('/lost-found', async (req, res) => {
-  const { kind } = parse(z.object({ kind: z.enum(['lost', 'found']).default('lost') }), req.query);
-  res.json(await query(sql.LIST_LOST_FOUND, [kind]));
+  const { kind, q } = parse(z.object({ kind: z.enum(['lost', 'found']).default('lost'), q: z.string().optional() }), req.query);
+  res.json(await query(sql.LIST_LOST_FOUND, [kind, likeParam(q)]));
 });
 
 itemsRouter.get('/lost-found/returned-count', async (_req, res) => {
@@ -115,6 +127,23 @@ itemsRouter.post('/lost-found', uploadImage.single('photo'), async (req, res) =>
     await removeImage(photo);
     throw err;
   }
+});
+
+itemsRouter.get('/lost-found/:id', async (req, res) => {
+  const row = await one(sql.LOST_FOUND_BY_ID, [uuidParam(req.params.id, 'Report not found'), uid(req)]);
+  if (!row) throw notFound('Report not found');
+  res.json(row);
+});
+
+itemsRouter.delete('/lost-found/:id', async (req, res) => {
+  const id = uuidParam(req.params.id, 'Report not found');
+  const me = uid(req);
+  const row = await one<{ reporter_id: string }>(sql.LOST_FOUND_REPORTER, [id]);
+  if (!row) throw notFound('Report not found');
+  if (row.reporter_id !== me && !(await isAdmin(me))) throw forbidden('Only the person who reported it or an admin can delete this');
+  // Also deletes the photo on Cloudinary.
+  await deleteContent('lost_found', id, me);
+  res.json({ ok: true });
 });
 
 itemsRouter.post('/lost-found/:id/returned', async (req, res) => {

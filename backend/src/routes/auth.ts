@@ -2,32 +2,29 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { randomInt } from 'node:crypto';
 import { z } from 'zod';
-import { requireAuth, signResetToken, signToken, uid, verifyResetToken } from '../auth';
+import { ACCOUNT_SUSPENDED, requireAuth, signResetToken, signToken, uid, verifyResetToken } from '../auth';
 import { config } from '../config';
 import { type Db, one, query } from '../db';
 import { consumeCode, issueCode, tryIssueCode } from '../codes';
 import { cleanupPending, consumePendingCode, resendPendingCode, savePendingSignup } from '../pending';
-import { HttpError, notFound, parse } from '../http';
+import { HttpError, parse } from '../http';
+import { disconnectUser } from '../realtime';
 import {
+  BUMP_TOKEN_VERSION,
   ENSURE_PROFILE,
   INSERT_PROFILE,
   INSERT_USER,
   PROFILE_BY_ID,
-  PROFILE_STATS,
   SET_PASSWORD,
-  UPDATE_PROFILE,
   USER_BY_EMAIL,
   USER_BY_ID,
   USERNAME_TAKEN,
 } from '../sql/auth';
-import { ACTIVITY_ITEMS } from '../sql/items';
-import { ACTIVITY_POSTS } from '../sql/posts';
-import { ACTIVITY_RIDES } from '../sql/rides';
-import { ACTIVITY_UPLOADS } from '../sql/documents';
+import { DELETE_ALL_MY_PUSH_TOKENS } from '../sql/push';
 
 export const authRouter = Router();
 
-const LEVELS = ['1A', '2A', '3A', 'MASTERE', 'DOCTORAT'] as const;
+export const LEVELS = ['1A', '2A', '3A', 'MASTERE', 'DOCTORAT'] as const;
 
 const email = z
   .string()
@@ -36,7 +33,7 @@ const email = z
   .pipe(z.email('enter a valid e-mail address'));
 
 /** 8+ characters with an uppercase letter, a lowercase letter, a digit and a special character (same rule as the app). */
-const password = z
+export const password = z
   .string()
   .max(200, 'is too long')
   .refine((p) => p.length >= 8, 'must be at least 8 characters')
@@ -66,13 +63,21 @@ const loginSchema = z.object({
 const DUMMY_HASH = bcrypt.hashSync('unilink-dummy-password', 10);
 const LOGIN_ERROR = 'Wrong e-mail or password';
 
-type UserRow = { id: string; email: string; password_hash: string };
+export type UserRow = { id: string; email: string; password_hash: string; token_version: number; banned_at: Date | null };
 
-/** { token, profile }: the answer of login, verify-email and reset-password. */
-async function sessionFor(user: { id: string; email: string }) {
+/** { token, profile }: the answer of login, verify-email and reset-password. Banned accounts get 403. */
+async function sessionFor(user: { id: string; email: string; token_version: number; banned_at: Date | null }) {
+  if (user.banned_at) throw new HttpError(403, ACCOUNT_SUSPENDED);
   await one(ENSURE_PROFILE, [user.id, user.email]);
   const profile = await one(PROFILE_BY_ID, [user.id]);
-  return { token: signToken(user.id), profile };
+  return { token: signToken(user.id, user.token_version), profile };
+}
+
+/** bcrypt check that also refuses accounts without a usable hash ('!' = old Google sign-in). */
+export async function passwordMatches(plain: string, hash: string | null | undefined) {
+  const usable = hash?.startsWith('$2') ? hash : DUMMY_HASH;
+  const ok = await bcrypt.compare(plain, usable);
+  return ok && usable !== DUMMY_HASH;
 }
 
 /** A free username from the e-mail (name@… → name, or name1234 when taken). */
@@ -108,7 +113,7 @@ authRouter.post('/auth/verify-email', async (req, res) => {
   await cleanupPending();
   const user = await consumePendingCode(body.email, body.code, async (db, pending) => {
     if (await one(USER_BY_EMAIL, [pending.email], db)) throw new HttpError(409, ACCOUNT_EXISTS);
-    const created = await one<{ id: string; email: string }>(INSERT_USER, [pending.email, pending.password_hash], db);
+    const created = await one<{ id: string; email: string; token_version: number; banned_at: Date | null }>(INSERT_USER, [pending.email, pending.password_hash], db);
     if (!created) throw new Error('User insert failed');
     const username = await freeUsername(created.email, db);
     await one(INSERT_PROFILE, [created.id, created.email, pending.full_name, username, pending.level], db);
@@ -135,9 +140,9 @@ authRouter.post('/auth/resend-code', async (req, res) => {
 authRouter.post('/auth/login', async (req, res) => {
   const body = parse(loginSchema, req.body);
   const user = await one<UserRow>(USER_BY_EMAIL, [body.email]);
-  const hash = user?.password_hash?.startsWith('$2') ? user.password_hash : DUMMY_HASH;
-  const ok = await bcrypt.compare(body.password, hash);
-  if (!user || !ok || hash === DUMMY_HASH) throw new HttpError(401, LOGIN_ERROR);
+  const ok = await passwordMatches(body.password, user?.password_hash);
+  if (!user || !ok) throw new HttpError(401, LOGIN_ERROR);
+  // Banned: 403 "Your account is suspended" (only after the right password, so it reveals nothing).
   res.json(await sessionFor(user));
 });
 
@@ -166,58 +171,21 @@ authRouter.post('/auth/reset-password', async (req, res) => {
   const userId = await verifyResetToken(body.resetToken, async (id) => (await one<UserRow>(USER_BY_ID, [id]))?.password_hash ?? null);
   if (!userId) throw new HttpError(400, INVALID_RESET);
   const passwordHash = await bcrypt.hash(body.password, 10);
-  await query(SET_PASSWORD, [userId, passwordHash]);
-  const user = await one<UserRow>(USER_BY_ID, [userId]);
+  // Also bumps token_version: every device that was signed in is signed out.
+  const user = await one<UserRow>(SET_PASSWORD, [userId, passwordHash]);
   if (!user) throw new HttpError(400, INVALID_RESET);
+  await query(DELETE_ALL_MY_PUSH_TOKENS, [userId]);
+  disconnectUser(userId);
   res.json(await sessionFor(user));
 });
 
+/* ───────────── Sessions ───────────── */
 
-/* ───────────── /me ───────────── */
-
-authRouter.get('/me', requireAuth, async (req, res) => {
-  const profile = await one(PROFILE_BY_ID, [uid(req)]);
-  if (!profile) throw notFound('Profile not found');
-  res.json(profile);
-});
-
-const updateSchema = z.object({
-  full_name: z.string().trim().min(1, 'cannot be empty').max(100).optional(),
-  username: z
-    .string()
-    .trim()
-    .toLowerCase()
-    .regex(/^[a-z0-9._-]{3,30}$/, '3–30 letters, digits, dots, dashes or underscores')
-    .optional(),
-  level: z.enum(LEVELS).optional(),
-  period: z.string().trim().max(20).nullable().optional(),
-});
-
-authRouter.patch('/me', requireAuth, async (req, res) => {
-  const body = parse(updateSchema, req.body);
-  try {
-    const profile = await one(UPDATE_PROFILE, [
-      uid(req),
-      body.full_name ?? null,
-      body.username ?? null,
-      body.level ?? null,
-      body.period !== undefined,
-      body.period ?? null,
-    ]);
-    res.json(profile);
-  } catch (err) {
-    if ((err as { code?: string }).code === '23505') throw new HttpError(409, 'This username is already taken');
-    throw err;
-  }
-});
-
-authRouter.get('/me/stats', requireAuth, async (req, res) => {
-  res.json(await one(PROFILE_STATS, [uid(req)]));
-});
-
-const ACTIVITY_SQL = { posts: ACTIVITY_POSTS, rides: ACTIVITY_RIDES, items: ACTIVITY_ITEMS, uploads: ACTIVITY_UPLOADS } as const;
-
-authRouter.get('/me/activity', requireAuth, async (req, res) => {
-  const { tab } = parse(z.object({ tab: z.enum(['posts', 'rides', 'items', 'uploads']).default('posts') }), req.query);
-  res.json(await query(ACTIVITY_SQL[tab], [uid(req)]));
+/** Sign out on every device (this one included): old tokens stop working. */
+authRouter.post('/auth/logout-all', requireAuth, async (req, res) => {
+  const me = uid(req);
+  await query(BUMP_TOKEN_VERSION, [me]);
+  await query(DELETE_ALL_MY_PUSH_TOKENS, [me]);
+  disconnectUser(me);
+  res.json({ ok: true });
 });

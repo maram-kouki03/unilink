@@ -8,8 +8,8 @@ const ITEM_SELECT = `
 /** $1 mode, $2 escaped search|null */
 export const LIST_ITEMS = `
   ${ITEM_SELECT}
-   where i.mode = $1 and i.available
-     and ($2::text is null or i.title ilike '%' || $2 || '%')
+   where i.mode = $1 and i.available and i.hidden_at is null
+     and ($2::text is null or i.title ilike '%' || $2 || '%' or i.category ilike '%' || $2 || '%')
    order by i.created_at desc
    limit 60`;
 
@@ -17,7 +17,8 @@ export const MY_ITEMS = `${ITEM_SELECT} where i.owner_id = $1 order by i.created
 
 export const ACTIVITY_ITEMS = MY_ITEMS;
 
-export const ITEM_BY_ID = `${ITEM_SELECT} where i.id = $1`;
+/** $1 item, $2 me: hidden items only for their owner. */
+export const ITEM_BY_ID = `${ITEM_SELECT} where i.id = $1 and (i.hidden_at is null or i.owner_id = $2)`;
 
 export const INSERT_ITEM = `
   insert into public.items
@@ -35,14 +36,15 @@ export const LIST_LOST_FOUND = `
   select lf.*, json_build_object('id', r.id, 'full_name', r.full_name) as reporter
     from public.lost_found lf
     join public.profiles r on r.id = lf.reporter_id
-   where lf.kind = $1
+   where lf.kind = $1 and lf.hidden_at is null
+     and ($2::text is null or lf.title ilike '%' || $2 || '%' or lf.location ilike '%' || $2 || '%')
    order by lf.status, lf.created_at desc
    limit 60`;
 
 export const RETURNED_THIS_MONTH = `
   select count(*)::int as count
     from public.lost_found
-   where status = 'returned' and created_at >= date_trunc('month', now())`;
+   where status = 'returned' and returned_at >= date_trunc('month', now())`;
 
 export const INSERT_LOST_FOUND = `
   insert into public.lost_found
@@ -52,4 +54,15 @@ export const INSERT_LOST_FOUND = `
 
 export const LOST_FOUND_REPORTER = `select reporter_id from public.lost_found where id = $1`;
 
-export const MARK_RETURNED = `update public.lost_found set status = 'returned' where id = $1 returning id, status`;
+export const MARK_RETURNED = `
+  update public.lost_found
+     set status = 'returned', returned_at = coalesce(returned_at, now())
+   where id = $1
+  returning id, status, returned_at`;
+
+/** $1 report, $2 me */
+export const LOST_FOUND_BY_ID = `
+  select lf.*, json_build_object('id', r.id, 'full_name', r.full_name) as reporter
+    from public.lost_found lf
+    join public.profiles r on r.id = lf.reporter_id
+   where lf.id = $1 and (lf.hidden_at is null or lf.reporter_id = $2)`;

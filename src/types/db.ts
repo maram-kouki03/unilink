@@ -17,6 +17,7 @@ export interface Profile {
   level: LevelCode | null;
   period: string | null;
   avatar_url: string | null;
+  bio?: string | null;
   role: 'student' | 'admin';
   last_seen_at: string | null;
   created_at: string;
@@ -68,6 +69,8 @@ export interface DocumentRow {
   uploader_id: string;
   downloads: number;
   created_at: string;
+  /** Set when hidden by moderation (only the uploader / admins still see it). */
+  hidden_at?: string | null;
   uploader?: Pick<Profile, 'id' | 'full_name' | 'level'> | null;
   subject?: {
     id: string;
@@ -98,6 +101,9 @@ export interface RideFeed {
   to_lat: number | null;
   to_lng: number | null;
   booked_by_me: boolean;
+  /** true on a ride the driver cancelled (still readable from a notification). */
+  cancelled?: boolean;
+  hidden_at?: string | null;
 }
 
 export interface ItemRow {
@@ -129,6 +135,7 @@ export interface LostFoundRow {
   description: string | null;
   photo_path: string | null;
   status: 'open' | 'returned';
+  returned_at?: string | null;
   created_at: string;
   reporter?: Pick<Profile, 'id' | 'full_name'> | null;
 }
@@ -142,6 +149,10 @@ export interface EventFeed {
   ends_at: string | null;
   location: string;
   description: string | null;
+  /** Seat limit, null = unlimited. */
+  seats?: number | null;
+  /** null when there is no limit. */
+  seats_left?: number | null;
   going: number;
   registered_by_me: boolean;
 }
@@ -189,6 +200,9 @@ export interface ConversationRow {
   context: string | null;
   last_message: string | null;
   last_at: string | null;
+  other_avatar_url?: string | null;
+  last_sender_id?: string | null;
+  unread_count?: number;
 }
 
 export interface MessageRow {
@@ -197,6 +211,37 @@ export interface MessageRow {
   sender_id: string;
   body: string;
   created_at: string;
+  read_at?: string | null;
+}
+
+export type ReportTargetType = 'document' | 'post' | 'comment' | 'item' | 'lost_found' | 'ride' | 'user';
+
+export interface ProfileStats {
+  uploads: number;
+  rides: number;
+  posts: number;
+  items?: number;
+  lost_found?: number;
+  bookings?: number;
+  events?: number;
+  comments?: number;
+}
+
+export interface AdminReport {
+  id: string;
+  target_type: ReportTargetType;
+  target_id: string;
+  reason: string;
+  status: 'open' | 'dismissed' | 'resolved';
+  action: 'dismiss' | 'delete_content' | 'ban_user' | null;
+  created_at: string;
+  resolved_at: string | null;
+  reporter: { id: string; full_name: string; email: string } | null;
+  open_reports: number;
+  preview: string | null;
+  owner_id: string | null;
+  hidden_at: string | null;
+  owner: { id: string; full_name: string; email: string; banned: boolean } | null;
 }
 
 export const LEVEL_LABEL: Record<LevelCode, string> = {

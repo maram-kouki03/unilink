@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { uid } from '../auth';
+import { isAdmin, uid } from '../auth';
+import { deleteContent } from '../content';
 import { one, query } from '../db';
 import { forbidden, HttpError, notFound, parse, uuidParam } from '../http';
 import { notify } from '../notify';
@@ -43,6 +44,16 @@ postsRouter.post('/posts', async (req, res) => {
   res.status(201).json(row);
 });
 
+postsRouter.delete('/posts/:id', async (req, res) => {
+  const id = uuidParam(req.params.id, 'Post not found');
+  const me = uid(req);
+  const post = await one<{ author_id: string }>(sql.POST_AUTHOR, [id]);
+  if (!post) throw notFound('Post not found');
+  if (post.author_id !== me && !(await isAdmin(me))) throw forbidden('Only the author or an admin can delete this post');
+  await deleteContent('post', id, me);
+  res.json({ ok: true });
+});
+
 postsRouter.post('/posts/:id/like', async (req, res) => {
   const id = uuidParam(req.params.id, 'Post not found');
   const me = uid(req);
@@ -58,7 +69,9 @@ postsRouter.post('/posts/:id/like', async (req, res) => {
 /* ───────────── Comments ───────────── */
 
 postsRouter.get('/posts/:id/comments', async (req, res) => {
-  res.json(await query(sql.LIST_COMMENTS, [uuidParam(req.params.id, 'Post not found')]));
+  const id = uuidParam(req.params.id, 'Post not found');
+  if (!(await one(sql.POST_BY_ID, [uid(req), id]))) throw notFound('Post not found');
+  res.json(await query(sql.LIST_COMMENTS, [id]));
 });
 
 const commentSchema = z.object({
@@ -83,10 +96,29 @@ postsRouter.post('/posts/:id/comments', async (req, res) => {
 
 postsRouter.post('/comments/:id/best', async (req, res) => {
   const commentId = uuidParam(req.params.id, 'Reply not found');
-  const row = await one<{ post_id: string; post_author_id: string }>(sql.COMMENT_POST, [commentId]);
+  const me = uid(req);
+  const row = await one<{ post_id: string; author_id: string; post_author_id: string }>(sql.COMMENT_POST, [commentId]);
   if (!row) throw notFound('Reply not found');
-  if (row.post_author_id !== uid(req)) throw forbidden('Only the author of the post can choose the best answer');
+  if (row.post_author_id !== me) throw forbidden('Only the author of the post can choose the best answer');
   await query(sql.MARK_BEST, [commentId, row.post_id]);
   emitTo(`post:${row.post_id}`, 'comment:updated', { post_id: row.post_id, id: commentId });
+  await notify({
+    target: row.author_id,
+    actor: me,
+    title: 'Your reply was chosen as the best answer',
+    body: null,
+    link: `/discussions/${row.post_id}`,
+  });
+  res.json({ ok: true });
+});
+
+postsRouter.delete('/comments/:id', async (req, res) => {
+  const commentId = uuidParam(req.params.id, 'Reply not found');
+  const me = uid(req);
+  const row = await one<{ post_id: string; author_id: string }>(sql.COMMENT_POST, [commentId]);
+  if (!row) throw notFound('Reply not found');
+  if (row.author_id !== me && !(await isAdmin(me))) throw forbidden('Only the author or an admin can delete this reply');
+  await deleteContent('comment', commentId, me);
+  emitTo(`post:${row.post_id}`, 'comment:updated', { post_id: row.post_id, id: commentId, deleted: true });
   res.json({ ok: true });
 });

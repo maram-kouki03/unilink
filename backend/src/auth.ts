@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import { config } from './config';
 import { one } from './db';
 import { HttpError } from './http';
-import { PROFILE_ROLE, USER_EXISTS } from './sql/auth';
+import { PROFILE_ROLE, USER_SESSION } from './sql/auth';
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -17,18 +17,40 @@ declare global {
 
 const SESSION_AUDIENCE = 'unilink-session';
 
-export function signToken(userId: string): string {
-  return jwt.sign({}, config.jwtSecret, { subject: userId, audience: SESSION_AUDIENCE, expiresIn: '30d' });
+/** Session token. `tv` = users.token_version: bumping it signs every device out. */
+export function signToken(userId: string, tokenVersion: number): string {
+  return jwt.sign({ tv: tokenVersion }, config.jwtSecret, { subject: userId, audience: SESSION_AUDIENCE, expiresIn: '30d' });
 }
 
-/** Returns the user id of a valid session token, or null. */
-export function verifyToken(token: string): string | null {
+/** Checks the signature only. Returns { userId, tokenVersion } or null. */
+function decodeToken(token: string): { userId: string; tokenVersion: number } | null {
   try {
     const payload = jwt.verify(token, config.jwtSecret, { audience: SESSION_AUDIENCE });
-    return typeof payload === 'object' && typeof payload.sub === 'string' ? payload.sub : null;
+    if (typeof payload !== 'object' || typeof payload.sub !== 'string') return null;
+    // Tokens issued before token_version existed have no tv: they count as version 0.
+    const tv = typeof payload.tv === 'number' ? payload.tv : 0;
+    return { userId: payload.sub, tokenVersion: tv };
   } catch {
     return null;
   }
+}
+
+export const SESSION_EXPIRED = 'Your session has expired. Please sign in again.';
+export const ACCOUNT_SUSPENDED = 'Your account is suspended';
+
+/**
+ * Full session check: valid signature, account still exists, token_version current, not banned.
+ * Throws 401 (expired / signed out) or 403 (banned).
+ */
+export async function verifySession(token: string): Promise<string> {
+  const decoded = token ? decodeToken(token) : null;
+  if (!decoded) throw new HttpError(401, SESSION_EXPIRED);
+  const user = await one<{ token_version: number; banned_at: Date | null }>(USER_SESSION, [decoded.userId]);
+  if (!user) throw new HttpError(401, SESSION_EXPIRED);
+  // Checked before the version so a banned user always gets 403, whatever token they hold.
+  if (user.banned_at) throw new HttpError(403, ACCOUNT_SUSPENDED);
+  if (user.token_version !== decoded.tokenVersion) throw new HttpError(401, SESSION_EXPIRED);
+  return decoded.userId;
 }
 
 /* ───────────── Password-reset token (after the reset code was checked) ───────────── */
@@ -76,11 +98,7 @@ export function uid(req: Request): string {
 export const requireAuth: RequestHandler = async (req, _res, next) => {
   const header = req.headers.authorization ?? '';
   const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
-  const userId = token ? verifyToken(token) : null;
-  if (!userId) throw new HttpError(401, 'Your session has expired. Please sign in again.');
-  // The account may have been deleted since the token was issued.
-  if (!(await one(USER_EXISTS, [userId]))) throw new HttpError(401, 'Your session has expired. Please sign in again.');
-  req.userId = userId;
+  req.userId = await verifySession(token);
   next();
 };
 

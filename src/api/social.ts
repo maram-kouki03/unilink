@@ -13,6 +13,7 @@ import {
   MessageRow,
   NotificationRow,
   PostFeed,
+  ProfileStats,
   RideFeed,
 } from '@/types/db';
 
@@ -129,6 +130,29 @@ export function useAddComment(postId: string) {
   });
 }
 
+export function useDeletePost() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (postId: string) => api(`/posts/${postId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['posts'] });
+      qc.invalidateQueries({ queryKey: ['activity'] });
+      qc.invalidateQueries({ queryKey: ['profileStats'] });
+    },
+  });
+}
+
+export function useDeleteComment(postId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (commentId: string) => api(`/comments/${commentId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['comments', postId] });
+      qc.invalidateQueries({ queryKey: ['post', postId] });
+    },
+  });
+}
+
 export function useMarkBest(postId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -172,7 +196,26 @@ export function useMessages(conversationId: string) {
 
   return useQuery({
     queryKey: ['messages', conversationId],
-    queryFn: () => api<MessageRow[]>(`/conversations/${conversationId}/messages`),
+    queryFn: async () => {
+      const rows = await api<MessageRow[]>(`/conversations/${conversationId}/messages`);
+      // Opening the chat marks the other person's messages as read (unread badge).
+      api(`/conversations/${conversationId}/read`, { method: 'POST' })
+        .then(() => qc.invalidateQueries({ queryKey: ['conversations'] }))
+        .catch(() => undefined);
+      return rows;
+    },
+  });
+}
+
+/** Older messages: pass the created_at of the oldest message already shown. Oldest first. */
+export async function fetchOlderMessages(conversationId: string, before: string, limit = 50) {
+  return api<MessageRow[]>(`/conversations/${conversationId}/messages`, { query: { before, limit } });
+}
+
+export function useUnreadMessagesCount() {
+  return useQuery({
+    queryKey: ['conversations', 'unread'],
+    queryFn: async () => (await api<{ count: number }>('/conversations/unread-count')).count,
   });
 }
 
@@ -206,6 +249,29 @@ export function useNotifications() {
   });
 }
 
+export function useUnreadNotificationsCount() {
+  const qc = useQueryClient();
+  useEffect(
+    () =>
+      onSocket('notification:new', () => {
+        qc.invalidateQueries({ queryKey: ['notifications', 'unread'] });
+      }),
+    [qc],
+  );
+  return useQuery({
+    queryKey: ['notifications', 'unread'],
+    queryFn: async () => (await api<{ count: number }>('/notifications/unread-count')).count,
+  });
+}
+
+export function useMarkNotificationRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api<NotificationRow>(`/notifications/${id}/read`, { method: 'POST' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['notifications'] }),
+  });
+}
+
 export function useMarkAllRead() {
   const qc = useQueryClient();
   return useMutation({
@@ -219,7 +285,7 @@ export function useMarkAllRead() {
 export function useProfileStats() {
   return useQuery({
     queryKey: ['profileStats'],
-    queryFn: () => api<{ uploads: number; rides: number; posts: number }>('/me/stats'),
+    queryFn: () => api<ProfileStats>('/me/stats'),
   });
 }
 
@@ -236,7 +302,7 @@ export function useActivity(tab: ActivityTab) {
 export function useUpdateProfile() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (p: { full_name?: string; username?: string; level?: LevelCode; period?: string | null }) =>
+    mutationFn: (p: { full_name?: string; username?: string; level?: LevelCode; period?: string | null; bio?: string | null }) =>
       api('/me', { method: 'PATCH', body: p }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['profileStats'] }),
   });

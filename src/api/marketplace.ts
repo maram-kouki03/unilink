@@ -118,3 +118,32 @@ export function useMarkReturned() {
     },
   });
 }
+
+export function useDeleteItem() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api(`/items/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['items'] });
+      qc.invalidateQueries({ queryKey: ['activity'] });
+    },
+  });
+}
+
+export function useLostFoundEntry(id: string) {
+  return useQuery({
+    queryKey: ['lostFoundEntry', id],
+    queryFn: () => api<LostFoundRow>(`/lost-found/${id}`),
+  });
+}
+
+export function useDeleteLostFound() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api(`/lost-found/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['lostFound'] });
+      qc.invalidateQueries({ queryKey: ['lostFoundReturned'] });
+    },
+  });
+}

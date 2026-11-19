@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { uid } from '../auth';
+import { isAdmin, uid } from '../auth';
+import { deleteContent } from '../content';
 import { one, query, transaction } from '../db';
-import { forbidden, HttpError, likeParam, notFound, parse, uuidParam } from '../http';
+import { bodyOf, forbidden, HttpError, likeParam, notFound, parse, uuidParam } from '../http';
 import { notify } from '../notify';
 import { PROFILE_NAME } from '../sql/auth';
 import * as sql from '../sql/rides';
@@ -12,8 +13,8 @@ export const ridesRouter = Router();
 const SCOPES = ['between_cities', 'within_city'] as const;
 
 ridesRouter.get('/rides', async (req, res) => {
-  const { scope } = parse(z.object({ scope: z.enum(SCOPES).default('between_cities') }), req.query);
-  res.json(await query(sql.LIST_RIDES, [uid(req), scope, likeParam(req.query.q)]));
+  const { scope, q } = parse(z.object({ scope: z.enum(SCOPES).default('between_cities'), q: z.string().optional() }), req.query);
+  res.json(await query(sql.LIST_RIDES, [uid(req), scope, likeParam(q)]));
 });
 
 ridesRouter.get('/rides/mine', async (req, res) => {
@@ -71,7 +72,7 @@ ridesRouter.post('/rides', async (req, res) => {
 
 ridesRouter.post('/rides/:id/book', async (req, res) => {
   const rideId = uuidParam(req.params.id, 'Ride not found');
-  const { seats } = parse(z.object({ seats: z.number().int().min(1).max(8).default(1) }), req.body ?? {});
+  const { seats } = parse(z.object({ seats: z.number().int().min(1).max(8).default(1) }), bodyOf(req.body));
   const me = uid(req);
 
   const result = await transaction(async (db) => {
@@ -122,6 +123,10 @@ ridesRouter.post('/rides/:id/cancel', async (req, res) => {
   const owner = await one<{ driver_id: string; cancelled: boolean }>(sql.RIDE_OWNER, [rideId]);
   if (!owner) throw notFound('Ride not found');
   if (owner.driver_id !== me) throw forbidden('Only the driver can cancel this ride');
+  if (owner.cancelled) {
+    res.json({ ok: true });
+    return;
+  }
   const row = await one<{ from_place: string }>(sql.CANCEL_RIDE, [rideId, me]);
   if (row) {
     const passengers = await query<{ passenger_id: string }>(sql.CONFIRMED_PASSENGERS, [rideId]);
@@ -137,5 +142,16 @@ ridesRouter.post('/rides/:id/cancel', async (req, res) => {
       ),
     );
   }
+  res.json({ ok: true });
+});
+
+/** Delete a ride for good (driver or admin). Passengers of an upcoming ride are told. */
+ridesRouter.delete('/rides/:id', async (req, res) => {
+  const rideId = uuidParam(req.params.id, 'Ride not found');
+  const me = uid(req);
+  const owner = await one<{ driver_id: string }>(sql.RIDE_OWNER, [rideId]);
+  if (!owner) throw notFound('Ride not found');
+  if (owner.driver_id !== me && !(await isAdmin(me))) throw forbidden('Only the driver or an admin can delete this ride');
+  await deleteContent('ride', rideId, me);
   res.json({ ok: true });
 });

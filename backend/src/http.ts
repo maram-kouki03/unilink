@@ -27,26 +27,35 @@ export function parse<S extends z.ZodType>(schema: S, data: unknown): z.infer<S>
   return res.data;
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const uuidSchema = z.guid();
 
 /** Route parameter that must be a uuid (otherwise 404, like an unknown id). */
 export function uuidParam(value: unknown, what = 'Not found'): string {
-  if (typeof value !== 'string' || !UUID_RE.test(value)) throw notFound(what);
-  return value.toLowerCase();
+  const res = uuidSchema.safeParse(value);
+  if (!res.success) throw notFound(what);
+  return res.data.toLowerCase();
 }
 
-export const isUuid = (value: unknown): value is string => typeof value === 'string' && UUID_RE.test(value);
+export const isUuid = (value: unknown): value is string => uuidSchema.safeParse(value).success;
+
+const optionalQueryText = z
+  .union([z.string(), z.undefined()])
+  .transform((v) => (typeof v === 'string' && v.trim() ? v.trim() : null))
+  .pipe(z.string().max(100, 'is too long').nullable());
 
 /** Optional search text from the query string, escaped for ILIKE. Empty → null. */
 export function likeParam(value: unknown): string | null {
-  if (typeof value !== 'string' || !value.trim()) return null;
-  return value.trim().replace(/[\\%_]/g, (c) => `\\${c}`);
+  const s = parse(optionalQueryText, value);
+  return s ? s.replace(/[\\%_]/g, (c) => `\\${c}`) : null;
 }
 
 /** Optional string from the query string. Empty → null. */
 export function strParam(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
+  return parse(optionalQueryText, value);
 }
+
+/** Express 5 leaves req.body undefined when nothing was sent. */
+export const bodyOf = (body: unknown) => (body && typeof body === 'object' ? body : {});
 
 export const notFoundHandler: RequestHandler = (_req, res) => {
   res.status(404).json({ error: 'Not found' });

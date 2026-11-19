@@ -17,30 +17,53 @@ const DOC_JOINS = `
   join public.levels   l on l.id = p.level_id
   left join public.profiles u on u.id = d.uploader_id`;
 
-/* ── folders ── */
+/* ── folders (counts only visible documents; no dependency on the old *_stats views) ── */
 
-export const LIST_LEVELS = `select * from public.level_stats order by sort`;
+const LEVEL_STATS = `
+  select l.id, l.code, l.name, l.short_name, l.sort,
+         count(d.id)::int as files,
+         max(d.created_at) as last_updated
+    from public.levels l
+    left join public.periods  p on p.level_id = l.id
+    left join public.subjects s on s.period_id = p.id
+    left join public.documents d on d.subject_id = s.id and d.hidden_at is null`;
 
-export const LEVEL_BY_ID = `select * from public.level_stats where id = $1`;
+export const LIST_LEVELS = `${LEVEL_STATS} group by l.id order by l.sort`;
 
-export const PERIODS_OF_LEVEL = `select * from public.period_stats where level_id = $1 order by sort`;
+export const LEVEL_BY_ID = `${LEVEL_STATS} where l.id = $1 group by l.id`;
+
+const PERIOD_STATS = `
+  select p.id, p.level_id, p.name, p.label, p.months, p.sort,
+         count(distinct s.id)::int as subjects,
+         count(d.id)::int as files,
+         max(d.created_at) as last_updated
+    from public.periods p
+    left join public.subjects s on s.period_id = p.id
+    left join public.documents d on d.subject_id = s.id and d.hidden_at is null`;
+
+export const PERIODS_OF_LEVEL = `${PERIOD_STATS} where p.level_id = $1 group by p.id order by p.sort`;
 
 export const PERIOD_BY_ID = `
   select ps.*, json_build_object('id', l.id, 'name', l.name, 'short_name', l.short_name) as level
-    from public.period_stats ps
-    join public.levels l on l.id = ps.level_id
-   where ps.id = $1`;
+    from (${PERIOD_STATS} where p.id = $1 group by p.id) ps
+    join public.levels l on l.id = ps.level_id`;
 
-export const SUBJECTS_OF_PERIOD = `select * from public.subject_stats where period_id = $1 order by name`;
+const SUBJECT_STATS = `
+  select s.id, s.period_id, s.name, s.color,
+         count(d.id)::int as files,
+         max(d.created_at) as last_updated
+    from public.subjects s
+    left join public.documents d on d.subject_id = s.id and d.hidden_at is null`;
+
+export const SUBJECTS_OF_PERIOD = `${SUBJECT_STATS} where s.period_id = $1 group by s.id order by s.name`;
 
 export const SUBJECT_BY_ID = `
   select ss.*,
          json_build_object('id', p.id, 'name', p.name,
            'level', json_build_object('id', l.id, 'name', l.name, 'short_name', l.short_name)) as period
-    from public.subject_stats ss
+    from (${SUBJECT_STATS} where s.id = $1 group by s.id) ss
     join public.periods p on p.id = ss.period_id
-    join public.levels  l on l.id = p.level_id
-   where ss.id = $1`;
+    join public.levels  l on l.id = p.level_id`;
 
 export const FOLDER_TREE = `
   select l.id, l.code, l.name, l.short_name, l.sort,
@@ -62,6 +85,7 @@ export const DOCS_OF_SUBJECT = `
   select ${DOC_COLUMNS}
     from public.documents d ${DOC_JOINS}
    where d.subject_id = $1
+     and d.hidden_at is null
      and ($2::text is null or d.doc_type = $2)
      and ($3::text is null or d.title ilike '%' || $3 || '%')
    order by d.created_at desc`;
@@ -70,7 +94,8 @@ export const DOCS_OF_SUBJECT = `
 export const SEARCH_DOCS = `
   select ${DOC_COLUMNS}
     from public.documents d ${DOC_JOINS}
-   where ($1::text is null or d.title ilike '%' || $1 || '%')
+   where d.hidden_at is null
+     and ($1::text is null or d.title ilike '%' || $1 || '%' or s.name ilike '%' || $1 || '%')
      and ($2::text is null or d.doc_type = $2)
    order by d.created_at desc
    limit 40`;
@@ -79,7 +104,7 @@ export const RECENT_DOCS = `
   select ${DOC_COLUMNS}, o.opened_at
     from public.document_opens o
     join public.documents d on d.id = o.document_id ${DOC_JOINS}
-   where o.user_id = $1
+   where o.user_id = $1 and d.hidden_at is null
    order by o.opened_at desc
    limit 8`;
 
@@ -87,7 +112,7 @@ export const STARRED_DOCS = `
   select ${DOC_COLUMNS}
     from public.document_stars st
     join public.documents d on d.id = st.document_id ${DOC_JOINS}
-   where st.user_id = $1
+   where st.user_id = $1 and d.hidden_at is null
    order by st.created_at desc`;
 
 export const MY_DOCS = `
@@ -98,15 +123,16 @@ export const MY_DOCS = `
 
 export const ACTIVITY_UPLOADS = MY_DOCS;
 
-/** $1 document, $2 me */
+/** $1 document, $2 me, $3 I am admin. Hidden documents: only the uploader and admins see them. */
 export const DOC_BY_ID = `
   select ${DOC_COLUMNS},
          exists (select 1 from public.document_stars x where x.document_id = d.id and x.user_id = $2) as starred
     from public.documents d ${DOC_JOINS}
-   where d.id = $1`;
+   where d.id = $1
+     and (d.hidden_at is null or d.uploader_id = $2 or $3::boolean)`;
 
 export const DOC_FILE = `
-  select id, file_path, file_name, file_ext, uploader_id, storage_resource_type, storage_format
+  select id, file_path, file_name, file_ext, uploader_id, storage_resource_type, storage_format, hidden_at
     from public.documents where id = $1`;
 
 /* ── writes ── */
@@ -118,8 +144,6 @@ export const INSERT_DOC = `
      storage_resource_type, storage_format)
   values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
   returning id`;
-
-export const DELETE_DOC = `delete from public.documents where id = $1`;
 
 export const UNSTAR = `delete from public.document_stars where user_id = $1 and document_id = $2 returning document_id`;
 
@@ -133,7 +157,3 @@ export const RECORD_OPEN = `
 
 export const INCREMENT_DOWNLOAD = `
   update public.documents set downloads = downloads + 1 where id = $1 returning downloads`;
-
-export const REPORT_DOC = `
-  insert into public.document_reports (document_id, reporter_id, reason) values ($1, $2, $3)
-  on conflict (document_id, reporter_id) do nothing`;

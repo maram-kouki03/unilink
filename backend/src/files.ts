@@ -19,6 +19,7 @@ cloudinary.config({
 
 const DOC_FOLDER = 'unilink/documents';
 const IMAGE_FOLDER = 'unilink/images';
+const AVATAR_FOLDER = 'unilink/avatars';
 const SIGNED_LINK_SECONDS = 60 * 60;
 
 const DOC_EXTS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'png', 'jpg', 'jpeg'];
@@ -88,27 +89,45 @@ export async function storeDocument(file: Express.Multer.File): Promise<StoredDo
 
 export type StoredImage = { publicId: string; url: string };
 
-/** Upload a public image (item / lost & found photo). */
-export async function storeImage(file: Express.Multer.File): Promise<StoredImage> {
+/** Upload a public image (item / lost & found photo, or a profile picture). */
+export async function storeImage(file: Express.Multer.File, kind: 'photo' | 'avatar' = 'photo'): Promise<StoredImage> {
+  const folder = kind === 'avatar' ? AVATAR_FOLDER : IMAGE_FOLDER;
   const res = await uploadBuffer(file.buffer, {
     resource_type: 'image',
     type: 'upload',
-    public_id: `${IMAGE_FOLDER}/${randomUUID()}`,
-    asset_folder: IMAGE_FOLDER,
+    public_id: `${folder}/${randomUUID()}`,
+    asset_folder: folder,
     overwrite: false,
+    // Profile pictures: square, small.
+    ...(kind === 'avatar' ? { transformation: [{ width: 512, height: 512, crop: 'fill', gravity: 'face' }] } : {}),
   });
   return { publicId: res.public_id, url: res.secure_url };
 }
 
-/** Signed link to a private document, valid 1 hour. */
-export function signedDocumentUrl(publicId: string, resourceType: ResourceType, format: string | null): string {
+/** Signed link to a private document, valid 1 hour. `download` = save as a file instead of opening it. */
+export function signedDocumentUrl(publicId: string, resourceType: ResourceType, format: string | null, download = false): string {
   return cloudinary.utils.private_download_url(publicId, format ?? '', {
     resource_type: resourceType,
     type: 'authenticated',
     expires_at: Math.floor(Date.now() / 1000) + SIGNED_LINK_SECONDS,
-    attachment: false,
+    attachment: download,
   });
 }
+
+/**
+ * public_id of one of OUR public images from its https URL, e.g.
+ * https://res.cloudinary.com/<cloud>/image/upload/v123/unilink/images/<uuid>.jpg → unilink/images/<uuid>.
+ * Anything else (old Supabase paths, other hosts) → null.
+ */
+export function imagePublicIdFromUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const m = /^https:\/\/res\.cloudinary\.com\/([^/]+)\/image\/upload\/(?:[^/]+\/)*?(?:v\d+\/)?(unilink\/(?:images|avatars)\/[^/.]+)(?:\.[a-z0-9]+)?$/i.exec(url);
+  if (!m || m[1] !== config.cloudinary.cloudName) return null;
+  return m[2];
+}
+
+/** Delete a public image from its stored URL. Never throws. */
+export const removeImageUrl = (url: string | null | undefined) => removeStored(imagePublicIdFromUrl(url), 'image', 'upload');
 
 /** Delete a file on Cloudinary. Never throws (a leftover file must not break the request). */
 export async function removeStored(publicId: string | null | undefined, resourceType: ResourceType, type: 'authenticated' | 'upload') {

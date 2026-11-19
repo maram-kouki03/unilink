@@ -78,3 +78,15 @@ export function useCancelRide() {
     },
   });
 }
+
+/** Delete for good (driver or admin). Passengers of an upcoming ride are notified. */
+export function useDeleteRide() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (rideId: string) => api(`/rides/${rideId}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['rides'] });
+      qc.invalidateQueries({ queryKey: ['myRides'] });
+    },
+  });
+}

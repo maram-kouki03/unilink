@@ -118,6 +118,31 @@ export function useToggleStar() {
   });
 }
 
+/** Signed Cloudinary link valid 1 hour. download=true → the file is saved instead of opened. */
+export async function documentLink(id: string, download = false) {
+  return api<{ url: string; expiresIn: number }>(`/documents/${id}/link`, { query: { download: download ? 1 : undefined } });
+}
+
+export function useMyDocuments() {
+  return useQuery({
+    queryKey: ['docsMine'],
+    queryFn: () => api<DocumentRow[]>('/documents/mine'),
+  });
+}
+
+export function useDeleteDocument() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api(`/documents/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['docs'] });
+      qc.invalidateQueries({ queryKey: ['docsMine'] });
+      qc.invalidateQueries({ queryKey: docKeys.levels });
+      qc.invalidateQueries({ queryKey: ['profileStats'] });
+    },
+  });
+}
+
 export async function reportDocument(id: string, reason: string) {
   await api(`/documents/${id}/report`, { body: { reason } });
 }

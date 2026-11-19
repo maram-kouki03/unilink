@@ -1,12 +1,20 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { isAdmin, uid } from '../auth';
+import { deleteContent } from '../content';
 import { one, query } from '../db';
-import { extOf, originalName, removeDocument, removeStored, signedDocumentUrl, storeDocument, uploadDocument, type ResourceType, type StoredDocument } from '../files';
-import { forbidden, HttpError, likeParam, notFound, parse, strParam, uuidParam } from '../http';
+import { extOf, originalName, removeDocument, signedDocumentUrl, storeDocument, uploadDocument, type ResourceType, type StoredDocument } from '../files';
+import { bodyOf, forbidden, HttpError, likeParam, notFound, parse, strParam, uuidParam } from '../http';
 import * as sql from '../sql/documents';
+import { createReport } from './moderation';
 
-type DocFile = { file_path: string; storage_resource_type: ResourceType | null; storage_format: string | null; uploader_id: string | null };
+type DocFile = {
+  file_path: string;
+  storage_resource_type: ResourceType | null;
+  storage_format: string | null;
+  uploader_id: string | null;
+  hidden_at: Date | null;
+};
 
 /** Every route here requires a signed-in user (requireAuth is applied in index.ts). */
 export const documentsRouter = Router();
@@ -20,10 +28,12 @@ const docTypeParam = (v: unknown) => {
   return s;
 };
 
+const levelIdSchema = z.coerce.number().int().min(0).max(32767);
+
 const levelIdParam = (v: unknown) => {
-  const n = Number(v);
-  if (!Number.isInteger(n) || n < 0 || n > 32767) throw notFound('Level not found');
-  return n;
+  const res = levelIdSchema.safeParse(v);
+  if (!res.success) throw notFound('Level not found');
+  return res.data;
 };
 
 /* ───────────── Folders ───────────── */
@@ -86,19 +96,33 @@ documentsRouter.get('/documents/mine', async (req, res) => {
 });
 
 documentsRouter.get('/documents/:id', async (req, res) => {
-  const doc = await one(sql.DOC_BY_ID, [uuidParam(req.params.id, 'Document not found'), uid(req)]);
+  const me = uid(req);
+  const doc = await one(sql.DOC_BY_ID, [uuidParam(req.params.id, 'Document not found'), me, await isAdmin(me)]);
   if (!doc) throw notFound('Document not found');
   res.json(doc);
 });
 
-documentsRouter.get('/documents/:id/link', async (req, res) => {
-  const id = uuidParam(req.params.id, 'Document not found');
+/** A document that is visible to me (hidden ones: only the uploader and admins). */
+async function visibleDoc(id: string, me: string) {
   const doc = await one<DocFile>(sql.DOC_FILE, [id]);
   if (!doc) throw notFound('Document not found');
+  if (doc.hidden_at && doc.uploader_id !== me && !(await isAdmin(me))) throw notFound('Document not found');
+  return doc;
+}
+
+/** ?download=1 → the link saves the file instead of opening it. */
+documentsRouter.get('/documents/:id/link', async (req, res) => {
+  const id = uuidParam(req.params.id, 'Document not found');
+  const { download } = parse(z.object({ download: z.enum(['1', '0', 'true', 'false']).optional() }), req.query);
+  const doc = await visibleDoc(id, uid(req));
   // Files uploaded before Cloudinary were on the old server disk and are gone.
   if (!doc.storage_resource_type) throw notFound('File not found on the server. Please upload it again.');
   // Signed Cloudinary link, valid 1 hour.
-  res.json({ url: signedDocumentUrl(doc.file_path, doc.storage_resource_type, doc.storage_format) });
+  const asFile = download === '1' || download === 'true';
+  res.json({
+    url: signedDocumentUrl(doc.file_path, doc.storage_resource_type, doc.storage_format, asFile),
+    expiresIn: 3600,
+  });
 });
 
 /* ───────────── Upload / delete ───────────── */
@@ -148,16 +172,14 @@ documentsRouter.delete('/documents/:id', async (req, res) => {
   const doc = await one<DocFile>(sql.DOC_FILE, [id]);
   if (!doc) throw notFound('Document not found');
   if (doc.uploader_id !== me && !(await isAdmin(me))) throw forbidden('Only the uploader or an admin can delete this document');
-  await query(sql.DELETE_DOC, [id]);
-  if (doc.storage_resource_type) await removeStored(doc.file_path, doc.storage_resource_type, 'authenticated');
+  // Also deletes the file on Cloudinary.
+  await deleteContent('document', id, me);
   res.json({ ok: true });
 });
 
 /* ───────────── Star / open / download / report ───────────── */
 
-async function ensureDoc(id: string) {
-  if (!(await one(sql.DOC_FILE, [id]))) throw notFound('Document not found');
-}
+const ensureDoc = (id: string, me: string) => visibleDoc(id, me);
 
 documentsRouter.post('/documents/:id/star', async (req, res) => {
   const id = uuidParam(req.params.id, 'Document not found');
@@ -166,28 +188,29 @@ documentsRouter.post('/documents/:id/star', async (req, res) => {
     res.json({ starred: false });
     return;
   }
-  await ensureDoc(id);
+  await ensureDoc(id, me);
   await query(sql.STAR, [me, id]);
   res.json({ starred: true });
 });
 
 documentsRouter.post('/documents/:id/open', async (req, res) => {
   const id = uuidParam(req.params.id, 'Document not found');
-  await ensureDoc(id);
+  await ensureDoc(id, uid(req));
   await query(sql.RECORD_OPEN, [uid(req), id]);
   res.json({ ok: true });
 });
 
 documentsRouter.post('/documents/:id/download', async (req, res) => {
-  const row = await one<{ downloads: number }>(sql.INCREMENT_DOWNLOAD, [uuidParam(req.params.id, 'Document not found')]);
+  const id = uuidParam(req.params.id, 'Document not found');
+  await ensureDoc(id, uid(req));
+  const row = await one<{ downloads: number }>(sql.INCREMENT_DOWNLOAD, [id]);
   if (!row) throw notFound('Document not found');
   res.json(row);
 });
 
 documentsRouter.post('/documents/:id/report', async (req, res) => {
   const id = uuidParam(req.params.id, 'Document not found');
-  const { reason } = parse(z.object({ reason: z.string().trim().min(1, 'required').max(500) }), req.body);
-  await ensureDoc(id);
-  await query(sql.REPORT_DOC, [id, uid(req), reason]);
-  res.status(201).json({ ok: true });
+  const { reason } = parse(z.object({ reason: z.string().trim().min(1, 'required').max(500) }), bodyOf(req.body));
+  // Same as POST /reports { targetType: 'document' } (5+ open reports hide the document).
+  res.status(201).json(await createReport(uid(req), 'document', id, reason));
 });
