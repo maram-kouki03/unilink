@@ -110,34 +110,70 @@ export function DashedAction({ label, icon = 'plus', onPress, height = 108 }: { 
 
 /* ───────────── File row ───────────── */
 
+const STATUS_BADGE: Record<string, { label: string; tone: 'violet' | 'danger' | 'neutral' } | undefined> = {
+  pending: { label: '⏳ Pending', tone: 'violet' },
+  rejected: { label: '❌ Rejected', tone: 'danger' },
+  hidden: { label: 'Hidden', tone: 'neutral' },
+};
+
+/** Small inline tag (Drive, Verified…). */
+function Tag({ label, fg, bg }: { label: string; fg: string; bg: string }) {
+  return (
+    <View style={{ backgroundColor: bg, borderRadius: 999, paddingHorizontal: 7, paddingVertical: 2 }}>
+      <Txt size={10} weight={800} color={fg}>
+        {label}
+      </Txt>
+    </View>
+  );
+}
+
+export const isVerifiedUploader = (doc: DocumentRow) =>
+  !!doc.uploader && (doc.uploader.trusted || doc.uploader.role === 'moderator' || doc.uploader.role === 'admin');
+
 export function FileRow({
   doc,
   onPress,
   onDownload,
   onMore,
+  onCorrection,
   last,
 }: {
   doc: DocumentRow;
   onPress: () => void;
   onDownload?: () => void;
   onMore?: () => void;
+  /** Shown on exams that have a linked correction. */
+  onCorrection?: () => void;
   last?: boolean;
 }) {
-  const meta = [`${DOC_TYPE_LABEL[doc.type]}${doc.number != null ? ` ${doc.number}` : ''} ${doc.academic_year ?? ''}`.trim(), fileSize(doc.size_bytes)]
-    .filter(Boolean)
-    .join(' · ');
+  const typeLabel = `${DOC_TYPE_LABEL[doc.type] ?? doc.type}${doc.number != null ? ` ${doc.number}` : ''}`;
+  const meta = [typeLabel, doc.academic_year, doc.source === 'drive_folder' ? 'Folder' : fileSize(doc.size_bytes)].filter(Boolean).join(' · ');
+  const status = doc.mine ? STATUS_BADGE[doc.status] : undefined;
+  const isFolder = doc.source === 'drive_folder';
   return (
     <View style={[styles.fileRow, !last && { borderBottomWidth: 1, borderBottomColor: colors.divider }]}>
-      <FileIcon ext={doc.file_ext} />
-      <Pressable accessibilityRole="button" onPress={onPress} style={{ flex: 1, gap: 3 }}>
-        <Txt size={14} weight={700} numberOfLines={1}>
+      {isFolder ? <Icon name="folder" size={26} color={colors.royal} /> : <FileIcon ext={doc.file_ext} />}
+      <Pressable accessibilityRole="button" onPress={onPress} style={{ flex: 1, gap: 4, paddingVertical: 10 }}>
+        <Txt size={14} weight={700} numberOfLines={2}>
           {doc.title}
         </Txt>
         <Txt size={12} color={colors.muted} numberOfLines={1}>
           {meta}
         </Txt>
+        <Row gap={6} style={{ flexWrap: 'wrap' }}>
+          {status ? <Badge label={status.label} tone={status.tone} /> : null}
+          {doc.useful_count > 0 ? <Tag label={`👍 ${doc.useful_count}`} fg={colors.violetDeep} bg={colors.violetBg} /> : null}
+          {doc.source !== 'upload' ? <Tag label="Drive" fg="#1C7A4A" bg="#DDF4E7" /> : null}
+          {isVerifiedUploader(doc) ? <Tag label="✓ Verified" fg={colors.royal} bg={colors.tile} /> : null}
+          {doc.version > 1 ? <Tag label={`v${doc.version}`} fg={colors.muted} bg="#E8E9F2" /> : null}
+          {onCorrection && doc.correction_id ? (
+            <Pressable accessibilityRole="button" onPress={onCorrection} hitSlop={6}>
+              <Tag label="See correction →" fg={colors.white} bg={colors.royal} />
+            </Pressable>
+          ) : null}
+        </Row>
       </Pressable>
-      {onDownload ? (
+      {onDownload && !isFolder ? (
         <Pressable accessibilityRole="button" accessibilityLabel="Download" onPress={onDownload} hitSlop={6} style={styles.rowBtn}>
           <Icon name="download" size={20} color={colors.royal} />
         </Pressable>

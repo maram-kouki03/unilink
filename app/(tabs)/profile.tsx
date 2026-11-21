@@ -4,12 +4,16 @@ import { router } from 'expo-router';
 import { Avatar, Button, Card, IconButton, Row, Screen, Txt } from '@/components/ui';
 import { Icon, IconName } from '@/components/Icon';
 import { useNotifications, useProfileStats } from '@/api/social';
+import { useModStats } from '@/api/documents';
+import { useRole } from '@/components/docs';
 import { useAuth } from '@/providers/AuthProvider';
 import { colors } from '@/theme';
 import { LEVEL_LABEL } from '@/types/db';
 
 export default function Profile() {
-  const { profile, signOut } = useAuth();
+  const { profile, signOut, refreshProfile } = useAuth();
+  const { isStaff, isAdmin } = useRole();
+  const modStats = useModStats(isStaff);
   const stats = useProfileStats();
   const notifs = useNotifications();
   const unread = notifs.data?.filter((n) => !n.read_at).length ?? 0;
@@ -18,7 +22,19 @@ export default function Profile() {
     { label: 'My Profile', icon: 'user', onPress: () => router.push('/profile/edit') },
     { label: 'My Activities', sub: 'My posts, rides, items, uploads', icon: 'activity', onPress: () => router.push('/profile/activity') },
     { label: 'Messages', icon: 'chat', onPress: () => router.push('/chat') },
+    { label: 'My contributions', sub: 'Status, reject reasons, counters', icon: 'upload', onPress: () => router.push('/documents/contributions') },
     { label: 'Saved Documents', icon: 'bookmark', onPress: () => router.push('/profile/saved') },
+    ...(isStaff
+      ? [
+          {
+            label: 'Moderation',
+            sub: isAdmin ? 'Queue, reports, users, stats, structure' : 'Review documents of your levels',
+            icon: 'shield' as IconName,
+            badge: modStats.data?.pending,
+            onPress: () => router.push('/mod/queue'),
+          },
+        ]
+      : []),
     { label: 'Notifications', icon: 'bell', badge: unread, onPress: () => router.push('/notifications') },
     { label: 'Settings', icon: 'gear', onPress: () => router.push('/profile/edit') },
     { label: 'Help & Support', icon: 'help', onPress: () => Linking.openURL('mailto:unilink@supcom.tn?subject=Unilink%20support') },
@@ -26,7 +42,15 @@ export default function Profile() {
   ];
 
   return (
-    <Screen withTabBar refreshing={stats.isRefetching} onRefresh={() => stats.refetch()}>
+    <Screen
+      withTabBar
+      refreshing={stats.isRefetching}
+      onRefresh={() => {
+        stats.refetch();
+        refreshProfile().catch(() => undefined);
+        if (isStaff) modStats.refetch();
+      }}
+    >
       <Row style={{ justifyContent: 'space-between' }}>
         <Txt size={26} weight={800} accessibilityRole="header">
           Profile

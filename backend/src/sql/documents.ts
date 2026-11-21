@@ -33,6 +33,9 @@ export const docColumns = (me: number) => `
   (d.uploader_id = $${me}) as mine,
   exists (select 1 from public.document_stars x where x.document_id = d.id and x.user_id = $${me}) as starred,
   exists (select 1 from public.document_useful_votes v where v.document_id = d.id and v.user_id = $${me}) as voted_useful,
+  (select c.id from public.documents c
+    where c.correction_of_id = d.id and c.status = 'approved'
+    order by c.useful_count desc, c.created_at desc limit 1) as correction_id,
   case when u.id is null then null
        else json_build_object('id', u.id, 'full_name', u.full_name, 'level', u.level, 'avatar_url', u.avatar_url,
                               'trusted', u.trusted, 'role', u.role) end as uploader,
@@ -119,14 +122,17 @@ export const FOLDER_TREE = `
   select l.id, l.code, l.name, l.short_name, l.sort,
          coalesce((
            select json_agg(json_build_object(
-                    'id', p.id, 'name', p.name, 'sort', p.sort,
+                    'id', p.id, 'name', p.name, 'sort', p.sort, 'label', p.label, 'months', p.months,
+                    'start_month', p.start_month, 'end_month', p.end_month,
                     'subjects', coalesce((
-                      select json_agg(json_build_object('id', s.id, 'name', s.name, 'code', s.code, 'track_id', s.track_id)
+                      select json_agg(json_build_object('id', s.id, 'name', s.name, 'code', s.code, 'track_id', s.track_id,
+                                                        'color', s.color, 'drive_folder_id', s.drive_folder_id,
+                                                        'drive_synced_at', s.drive_synced_at)
                                       order by s.name)
                         from public.subjects s where s.period_id = p.id), '[]'::json))
                   order by p.sort)
              from public.periods p where p.level_id = l.id), '[]'::json) as periods,
-         coalesce((select json_agg(json_build_object('id', t.id, 'name', t.name, 'code', t.code) order by t.sort, t.name)
+         coalesce((select json_agg(json_build_object('id', t.id, 'name', t.name, 'code', t.code, 'sort', t.sort) order by t.sort, t.name)
                      from public.tracks t where t.level_id = l.id), '[]'::json) as tracks
     from public.levels l
    order by l.sort, l.id`;

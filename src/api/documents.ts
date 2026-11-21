@@ -93,6 +93,7 @@ export type DocSort = 'useful' | 'recent';
 export function useDocuments(subjectId: string, type: DocType | 'all' = 'all', year = '', sort: DocSort = 'recent') {
   return useQuery({
     queryKey: docKeys.docs(subjectId, type, year, sort),
+    enabled: !!subjectId,
     queryFn: () =>
       api<DocumentRow[]>(`/subjects/${subjectId}/documents`, {
         query: { type: type === 'all' ? undefined : type, year: year || undefined, sort },
@@ -153,6 +154,26 @@ export function useTopContributors() {
 }
 
 /** Levels → periods → subjects (+ tracks) – used by the contribution form pickers. */
+export type TreeSubject = {
+  id: string;
+  name: string;
+  code: string | null;
+  track_id: string | null;
+  color: string | null;
+  drive_folder_id: string | null;
+  drive_synced_at: string | null;
+};
+export type TreePeriod = {
+  id: string;
+  name: string;
+  sort: number;
+  label: string;
+  months: string | null;
+  start_month: number | null;
+  end_month: number | null;
+  subjects: TreeSubject[];
+};
+
 export function useFolderTree() {
   return useQuery({
     queryKey: ['folderTree'],
@@ -164,8 +185,9 @@ export function useFolderTree() {
           code: string;
           name: string;
           short_name: string;
-          periods: { id: string; name: string; sort: number; subjects: { id: string; name: string; code: string | null; track_id: string | null }[] }[];
-          tracks: { id: string; name: string; code: string | null }[];
+          sort: number;
+          periods: TreePeriod[];
+          tracks: { id: string; name: string; code: string | null; sort: number }[];
         }[]
       >('/folder-tree'),
   });
@@ -393,8 +415,8 @@ export type ModStats = {
   empty_subjects: { id: string; name: string; code: string | null; period: string; level: string }[];
 };
 
-export function useModStats() {
-  return useQuery({ queryKey: docKeys.modStats, queryFn: () => api<ModStats>('/mod/stats') });
+export function useModStats(enabled = true) {
+  return useQuery({ queryKey: docKeys.modStats, enabled, queryFn: () => api<ModStats>('/mod/stats') });
 }
 
 export type ModAction =
@@ -470,5 +492,38 @@ export function useDriveSync() {
   return useMutation({
     mutationFn: (subjectId?: string) => api<DriveSyncResult | { started: number }>('/mod/drive-sync', { body: { subjectId } }),
     onSuccess: () => invalidateLists(qc),
+  });
+}
+
+/* ───────────── Admin: academic structure ───────────── */
+
+export type StructureKind = 'levels' | 'periods' | 'tracks' | 'subjects';
+
+const invalidateStructure = (qc: ReturnType<typeof useQueryClient>) => {
+  qc.invalidateQueries({ queryKey: ['folderTree'] });
+  qc.invalidateQueries({ queryKey: ['tracks'] });
+  qc.invalidateQueries({ queryKey: ['level'] });
+  qc.invalidateQueries({ queryKey: ['subject'] });
+  qc.invalidateQueries({ queryKey: docKeys.modStats });
+  invalidateLists(qc);
+};
+
+/** Create (no id) or update (id) a level, period, track or subject. */
+export function useSaveStructure() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (p: { kind: StructureKind; id?: string | number; body: Record<string, unknown> }) =>
+      p.id != null
+        ? api(`/admin/${p.kind}/${p.id}`, { method: 'PATCH', body: p.body })
+        : api(`/admin/${p.kind}`, { method: 'POST', body: p.body }),
+    onSuccess: () => invalidateStructure(qc),
+  });
+}
+
+export function useDeleteStructure() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (p: { kind: StructureKind; id: string | number }) => api(`/admin/${p.kind}/${p.id}`, { method: 'DELETE' }),
+    onSuccess: () => invalidateStructure(qc),
   });
 }

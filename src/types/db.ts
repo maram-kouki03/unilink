@@ -113,6 +113,8 @@ export interface DocumentRow {
   mine: boolean;
   starred: boolean;
   voted_useful: boolean;
+  /** Best approved correction linked to this exam. */
+  correction_id?: string | null;
   uploader?: (Pick<Profile, 'id' | 'full_name' | 'level' | 'avatar_url'> & { trusted: boolean; role: Role }) | null;
   subject?: {
     id: string;
@@ -310,12 +312,12 @@ export const LEVEL_CODES: LevelCode[] = ['1A', '2A', '3A', 'MASTERE', 'DOCTORAT'
 export const DOC_TYPES: DocType[] = ['course', 'td', 'tp', 'exam', 'correction', 'other'];
 
 export const DOC_TYPE_LABEL: Record<DocType, string> = {
-  course: 'Cours',
+  course: 'Course',
   td: 'TD',
   tp: 'TP',
-  exam: 'Examen',
-  correction: 'Corrigé',
-  other: 'Autre',
+  exam: 'Exam',
+  correction: 'Correction',
+  other: 'Other',
 };
 
 export const DOC_FILTERS: { value: DocType | 'all'; label: string }[] = [
