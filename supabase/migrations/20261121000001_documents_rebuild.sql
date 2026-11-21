@@ -6,12 +6,28 @@
 --  · document_useful_votes, document_reports (reason enum), moderation_log
 --
 -- IDEMPOTENT: safe to run more than once. Never edits older migrations.
+-- ROBUST: objects that come from older, optional migrations (documents.hidden_at,
+-- documents.storage_resource_type, public.document_opens, public.reports, …) are only used
+-- when they exist: checked first, then run with EXECUTE so a missing object never breaks parsing.
 -- Existing documents are kept: status 'approved' (or 'hidden' if they were hidden), source 'upload'.
 -- ════════════════════════════════════════════════════════════════
 
 create extension if not exists pgcrypto;
 
+-- ───────────── 0. Required base tables (clear message instead of a cryptic error) ─────────────
+do $$
+declare
+  t text;
+begin
+  foreach t in array array['public.users', 'public.profiles', 'public.levels', 'public.periods', 'public.subjects', 'public.documents'] loop
+    if to_regclass(t) is null then
+      raise exception 'Table % is missing: run the older migrations first (schema + own_backend).', t;
+    end if;
+  end loop;
+end $$;
+
 -- ───────────── 1. Roles, trusted contributors, moderator levels ─────────────
+alter table public.profiles add column if not exists role text not null default 'student';
 alter table public.profiles drop constraint if exists profiles_role_check;
 alter table public.profiles add constraint profiles_role_check check (role in ('student', 'moderator', 'admin'));
 
@@ -30,10 +46,17 @@ create index if not exists moderator_levels_level_idx on public.moderator_levels
 -- ───────────── 2. Academic structure (editable by the admin) ─────────────
 -- Levels: the admin may add levels with new codes.
 alter table public.levels drop constraint if exists levels_code_check;
+alter table public.levels add column if not exists short_name text;
+alter table public.levels add column if not exists sort       smallint not null default 0;
+update public.levels set short_name = name where short_name is null;
 
--- Periods (semesters): months they cover, to find "the current semester".
+-- Periods (semesters): label, months text, and the months they cover, to find "the current semester".
+alter table public.periods add column if not exists label       text;
+alter table public.periods add column if not exists months      text;
+alter table public.periods add column if not exists sort        smallint not null default 0;
 alter table public.periods add column if not exists start_month smallint;
 alter table public.periods add column if not exists end_month   smallint;
+update public.periods set label = name where label is null;
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'periods_months_check') then
@@ -86,7 +109,8 @@ begin
   end if;
 end $$;
 
--- Subjects: code, optional track, optional official Drive folder.
+-- Subjects: color, code, optional track, optional official Drive folder.
+alter table public.subjects add column if not exists color           text;
 alter table public.subjects add column if not exists code            text;
 alter table public.subjects add column if not exists track_id        uuid;
 alter table public.subjects add column if not exists drive_folder_id text;
@@ -106,24 +130,41 @@ create index if not exists subjects_period_idx on public.subjects (period_id);
 create index if not exists subjects_track_idx  on public.subjects (track_id) where track_id is not null;
 
 -- ───────────── 3. Documents ─────────────
--- 3a. Renames (only the first time).
+-- 3a. Renames (only the first time, only when the old column exists and the new one does not).
 do $$
 begin
   if exists (select 1 from information_schema.columns
-              where table_schema = 'public' and table_name = 'documents' and column_name = 'doc_type') then
+              where table_schema = 'public' and table_name = 'documents' and column_name = 'doc_type')
+     and not exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'documents' and column_name = 'type') then
     alter table public.documents drop constraint if exists documents_doc_type_check;
     alter table public.documents rename column doc_type to type;
-    update public.documents set type = case type when 'td_tp' then 'td' when 'summary' then 'other' else type end;
+    execute $q$ update public.documents set type = case type when 'td_tp' then 'td' when 'summary' then 'other' else type end $q$;
   end if;
   if exists (select 1 from information_schema.columns
-              where table_schema = 'public' and table_name = 'documents' and column_name = 'downloads') then
+              where table_schema = 'public' and table_name = 'documents' and column_name = 'downloads')
+     and not exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'documents' and column_name = 'download_count') then
     alter table public.documents rename column downloads to download_count;
   end if;
   if exists (select 1 from information_schema.columns
-              where table_schema = 'public' and table_name = 'documents' and column_name = 'file_path') then
+              where table_schema = 'public' and table_name = 'documents' and column_name = 'file_path')
+     and not exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'documents' and column_name = 'cloudinary_public_id') then
     alter table public.documents rename column file_path to cloudinary_public_id;
   end if;
 end $$;
+
+-- Base columns the backend needs (normally from the first schema; added only if missing).
+alter table public.documents add column if not exists type                 text not null default 'other';
+alter table public.documents add column if not exists download_count       int  not null default 0;
+alter table public.documents add column if not exists cloudinary_public_id text;
+alter table public.documents add column if not exists file_name            text;
+alter table public.documents add column if not exists file_ext             text not null default 'pdf';
+alter table public.documents add column if not exists size_bytes           bigint;
+alter table public.documents add column if not exists drive_url            text;
+alter table public.documents add column if not exists academic_year        text;
+alter table public.documents add column if not exists created_at           timestamptz not null default now();
 
 alter table public.documents alter column cloudinary_public_id drop not null;
 alter table public.documents alter column file_name drop not null;
@@ -158,26 +199,51 @@ alter table public.documents add column if not exists report_count         int n
 alter table public.documents add column if not exists drive_modified_at    timestamptz;
 alter table public.documents add column if not exists updated_at           timestamptz not null default now();
 
--- status: added once, filled from hidden_at (hidden documents stay hidden).
+-- status: added once and filled for the existing rows.
+--  · documents.hidden_at exists (moderation migration ran): hidden ones stay hidden, the others are approved.
+--  · documents.hidden_at missing: every existing document is approved.
+--  · documents.storage_resource_type exists (Cloudinary migration ran): old local files (null) are hidden,
+--    they cannot be opened any more. Missing: nothing is hidden for that reason.
 do $$
 begin
   if not exists (select 1 from information_schema.columns
                   where table_schema = 'public' and table_name = 'documents' and column_name = 'status') then
     alter table public.documents add column status text not null default 'pending';
-    update public.documents
-       set status = case when hidden_at is not null then 'hidden' else 'approved' end,
-           hidden_reason = case when hidden_at is not null then 'reports' end,
-           reviewed_at = created_at;
+
+    if exists (select 1 from information_schema.columns
+                where table_schema = 'public' and table_name = 'documents' and column_name = 'hidden_at') then
+      execute $q$
+        update public.documents
+           set status        = case when hidden_at is not null then 'hidden' else 'approved' end,
+               hidden_reason = case when hidden_at is not null then 'reports' end,
+               reviewed_at   = created_at
+      $q$;
+    else
+      execute $q$ update public.documents set status = 'approved', reviewed_at = created_at $q$;
+    end if;
+
+    if exists (select 1 from information_schema.columns
+                where table_schema = 'public' and table_name = 'documents' and column_name = 'storage_resource_type') then
+      execute $q$
+        update public.documents
+           set status = 'hidden', hidden_reason = 'file_missing'
+         where source = 'upload' and storage_resource_type is null and status = 'approved'
+      $q$;
+    end if;
   end if;
 end $$;
 
--- Old local files (before Cloudinary) are gone: such rows cannot be opened, keep them hidden.
-update public.documents
-   set status = 'hidden', hidden_reason = 'file_missing'
- where source = 'upload' and storage_resource_type is null and status = 'approved';
+-- Cloudinary columns the backend writes on upload (normally from the Cloudinary migration; added only if missing,
+-- and only after the step above so their absence is still detected there).
+alter table public.documents add column if not exists storage_resource_type text;
+alter table public.documents add column if not exists storage_format        text;
 
 do $$
 begin
+  if not exists (select 1 from pg_constraint where conname = 'documents_storage_resource_type_check') then
+    alter table public.documents add constraint documents_storage_resource_type_check
+      check (storage_resource_type is null or storage_resource_type in ('raw', 'image'));
+  end if;
   if not exists (select 1 from pg_constraint where conname = 'documents_source_check') then
     alter table public.documents add constraint documents_source_check check (source in ('upload', 'drive_file', 'drive_folder'));
   end if;
@@ -228,7 +294,21 @@ alter table public.documents alter column status set default 'pending';
 -- Uploads only (Drive documents have no Cloudinary file).
 alter table public.documents alter column file_ext set default 'pdf';
 
--- 3d. Counters from existing data.
+-- 3d. Opens and stars (normally from the first schema; created only if missing), then counters.
+create table if not exists public.document_opens (
+  user_id      uuid not null references public.profiles (id) on delete cascade,
+  document_id  uuid not null references public.documents (id) on delete cascade,
+  opened_at    timestamptz not null default now(),
+  primary key (user_id, document_id)
+);
+create table if not exists public.document_stars (
+  user_id      uuid not null references public.profiles (id) on delete cascade,
+  document_id  uuid not null references public.documents (id) on delete cascade,
+  created_at   timestamptz not null default now(),
+  primary key (user_id, document_id)
+);
+create index if not exists document_opens_user_idx on public.document_opens (user_id, opened_at desc);
+
 update public.documents d
    set open_count = sub.n
   from (select document_id, count(*)::int as n from public.document_opens group by document_id) sub
@@ -275,32 +355,44 @@ begin
     alter table public.document_reports add column action      text;
 
     -- Free-text reasons → 'other' + the text as comment.
-    update public.document_reports
-       set comment = left(reason, 500), reason = 'other'
-     where reason not in ('wrong_file', 'unreadable', 'wrong_subject', 'copyrighted', 'duplicate', 'other');
-
-    -- These old rows were copied into public.reports: they stay open only if the copy is still open.
-    update public.document_reports dr
-       set status = 'resolved', resolved_at = now(), action = 'dismiss'
-     where not exists (select 1 from public.reports r
-                        where r.target_type = 'document' and r.target_id = dr.document_id
-                          and r.reporter_id = dr.reporter_id and r.status = 'open');
+    execute $q$
+      update public.document_reports
+         set comment = left(reason, 500), reason = 'other'
+       where reason not in ('wrong_file', 'unreadable', 'wrong_subject', 'copyrighted', 'duplicate', 'other')
+    $q$;
 
     alter table public.document_reports drop constraint if exists document_reports_document_id_reporter_id_key;
 
-    -- Open document reports made through the generic table since then.
-    insert into public.document_reports (document_id, reporter_id, reason, comment, created_at, status)
-    select r.target_id, r.reporter_id, 'other', left(r.reason, 500), r.created_at, 'open'
-      from public.reports r
-     where r.target_type = 'document' and r.status = 'open'
-       and exists (select 1 from public.documents d where d.id = r.target_id)
-       and exists (select 1 from public.profiles p where p.id = r.reporter_id)
-       and not exists (select 1 from public.document_reports dr
-                        where dr.document_id = r.target_id and dr.reporter_id = r.reporter_id and dr.status = 'open');
+    -- Only when the generic public.reports table exists (moderation migration).
+    -- Without it the old document reports simply stay open.
+    if to_regclass('public.reports') is not null then
+      -- These old rows were copied into public.reports: they stay open only if the copy is still open.
+      execute $q$
+        update public.document_reports dr
+           set status = 'resolved', resolved_at = now(), action = 'dismiss'
+         where not exists (select 1 from public.reports r
+                            where r.target_type = 'document' and r.target_id = dr.document_id
+                              and r.reporter_id = dr.reporter_id and r.status = 'open')
+      $q$;
 
-    -- Document reports now live only in document_reports.
-    update public.reports set status = 'resolved', resolved_at = now()
-     where target_type = 'document' and status = 'open';
+      -- Open document reports made through the generic table since then.
+      execute $q$
+        insert into public.document_reports (document_id, reporter_id, reason, comment, created_at, status)
+        select r.target_id, r.reporter_id, 'other', left(r.reason, 500), r.created_at, 'open'
+          from public.reports r
+         where r.target_type = 'document' and r.status = 'open'
+           and exists (select 1 from public.documents d where d.id = r.target_id)
+           and exists (select 1 from public.profiles p where p.id = r.reporter_id)
+           and not exists (select 1 from public.document_reports dr
+                            where dr.document_id = r.target_id and dr.reporter_id = r.reporter_id and dr.status = 'open')
+      $q$;
+
+      -- Document reports now live only in document_reports.
+      execute $q$
+        update public.reports set status = 'resolved', resolved_at = now()
+         where target_type = 'document' and status = 'open'
+      $q$;
+    end if;
   end if;
 end $$;
 
@@ -360,15 +452,17 @@ alter table public.document_useful_votes enable row level security;
 alter table public.document_reports      enable row level security;
 alter table public.moderation_log        enable row level security;
 alter table public.documents             enable row level security;
+alter table public.document_opens        enable row level security;
+alter table public.document_stars        enable row level security;
 
 do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'anon') then
-    execute 'revoke all on public.moderator_levels, public.tracks, public.document_useful_votes,
-                          public.document_reports, public.moderation_log, public.documents from anon';
+    execute 'revoke all on public.moderator_levels, public.tracks, public.document_useful_votes, public.document_reports,
+                          public.moderation_log, public.documents, public.document_opens, public.document_stars from anon';
   end if;
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
-    execute 'revoke all on public.moderator_levels, public.tracks, public.document_useful_votes,
-                          public.document_reports, public.moderation_log, public.documents from authenticated';
+    execute 'revoke all on public.moderator_levels, public.tracks, public.document_useful_votes, public.document_reports,
+                          public.moderation_log, public.documents, public.document_opens, public.document_stars from authenticated';
   end if;
 end $$;
