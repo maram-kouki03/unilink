@@ -8,6 +8,7 @@ import { disconnectUser } from '../realtime';
 import { BAN_USER, UNBAN_USER } from '../sql/auth';
 import * as sql from '../sql/moderation';
 import { DELETE_ALL_MY_PUSH_TOKENS } from '../sql/push';
+import { createDocumentReport } from '../docs';
 
 export const moderationRouter = Router();
 
@@ -18,6 +19,11 @@ const reasonSchema = z.string().trim().min(1, 'required').max(500);
  * the content is hidden until an admin decides.
  */
 export async function createReport(reporterId: string, type: sql.TargetType, targetId: string, reason: string) {
+  // Documents have their own reports (reason list, moderators of the level): see POST /documents/:id/report.
+  if (type === 'document') {
+    const r = await createDocumentReport(reporterId, targetId, 'other', reason.slice(0, 500));
+    return { ok: true, id: r.id };
+  }
   const target = await one<{ owner_id: string | null }>(sql.TARGET_OWNER[type], [targetId]);
   if (!target) throw notFound('This content no longer exists');
   if (type === 'user' && targetId === reporterId) throw new HttpError(400, 'You cannot report yourself');
@@ -58,7 +64,7 @@ adminRouter.get('/admin/reports', async (req, res) => {
   res.json(await query(sql.LIST_REPORTS, [q.status === 'all' ? null : q.status, q.limit]));
 });
 
-async function banUser(targetId: string, adminId: string, reason: string | null) {
+export async function banUser(targetId: string, adminId: string, reason: string | null) {
   if (targetId === adminId) throw new HttpError(400, 'You cannot ban yourself');
   const role = await one<{ role: string }>(sql.PROFILE_ROLE_OF, [targetId]);
   if (!role) throw notFound('User not found');

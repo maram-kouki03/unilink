@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import multer from 'multer';
 import { v2 as cloudinary, type UploadApiOptions, type UploadApiResponse } from 'cloudinary';
 import { config } from './config';
@@ -22,9 +22,10 @@ const IMAGE_FOLDER = 'unilink/images';
 const AVATAR_FOLDER = 'unilink/avatars';
 const SIGNED_LINK_SECONDS = 60 * 60;
 
-const DOC_EXTS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'png', 'jpg', 'jpeg'];
+export const DOC_EXTS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'png', 'jpg', 'jpeg', 'webp'];
 /** Documents that Cloudinary stores as images; everything else (PDF, Office) is stored as "raw". */
-const DOC_IMAGE_EXTS = ['png', 'jpg', 'jpeg'];
+const DOC_IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp'];
+export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp'];
 
 export type ResourceType = 'image' | 'raw';
@@ -34,15 +35,18 @@ export const extOf = (name: string) => (path.extname(name).slice(1) || '').toLow
 /** Multer decodes file names as latin1; React Native sends UTF-8. */
 export const originalName = (file: Express.Multer.File) => Buffer.from(file.originalname, 'latin1').toString('utf8');
 
-/** Private documents, 50 MB, kept in memory then sent to Cloudinary. */
+/** Private documents, 10 MB, kept in memory then sent to Cloudinary. */
 export const uploadDocument = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024, files: 1 },
+  limits: { fileSize: MAX_DOCUMENT_BYTES, files: 1, fields: 20, fieldSize: 10_000 },
   fileFilter: (_req, file, cb) => {
     if (DOC_EXTS.includes(extOf(originalName(file)))) cb(null, true);
-    else cb(new HttpError(400, 'Allowed files: PDF, Word, PowerPoint, Excel, PNG, JPG'));
+    else cb(new HttpError(400, 'file: allowed files are PDF, Word, PowerPoint, Excel, PNG, JPG, WEBP'));
   },
 });
+
+/** Hex SHA-256 of a file (duplicate detection). */
+export const sha256Of = (buffer: Buffer) => createHash('sha256').update(buffer).digest('hex');
 
 /** Public images, 5 MB, kept in memory then sent to Cloudinary. */
 export const uploadImage = multer({

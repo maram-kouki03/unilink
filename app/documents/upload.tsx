@@ -10,17 +10,14 @@ import { useAuth } from '@/providers/AuthProvider';
 import { fileSize } from '@/lib/format';
 import { extOf } from '@/lib/storage';
 import { colors, shadows } from '@/theme';
-import { DocType } from '@/types/db';
+import { DOC_TYPE_LABEL, DOC_TYPES, DocType } from '@/types/db';
 
-const TYPES: { value: DocType; label: string }[] = [
-  { value: 'exam', label: 'Exam' },
-  { value: 'course', label: 'Course' },
-  { value: 'summary', label: 'Summary' },
-  { value: 'td_tp', label: 'TD/TP' },
-];
+const TYPES: { value: DocType; label: string }[] = DOC_TYPES.map((t) => ({ value: t, label: DOC_TYPE_LABEL[t] }));
 
 const thisYear = new Date().getMonth() >= 8 ? new Date().getFullYear() : new Date().getFullYear() - 1;
-const YEARS = [0, 1, 2, 3].map((i) => `${thisYear - i}-${thisYear - i + 1}`);
+/** 'YYYY/YY', e.g. 2025/26 */
+const YEARS = [0, 1, 2, 3].map((i) => `${thisYear - i}/${String((thisYear - i + 1) % 100).padStart(2, '0')}`);
+const MAX_MB = 10;
 
 function Step({ n, title }: { n: number; title: string }) {
   return (
@@ -49,8 +46,7 @@ export default function Upload() {
   const [subjectId, setSubjectId] = useState<string>(params.subjectId ?? '');
   const [type, setType] = useState<DocType>('exam');
   const [year, setYear] = useState(YEARS[0]);
-  const [title, setTitle] = useState('');
-  const [driveUrl, setDriveUrl] = useState('');
+  const [number, setNumber] = useState('');
 
   // Default to the student's own level
   useEffect(() => {
@@ -82,20 +78,21 @@ export default function Upload() {
     });
     if (res.canceled) return;
     const f = res.assets[0];
-    if ((f.size ?? 0) > 50 * 1024 * 1024) return Alert.alert('File too large', 'Maximum size is 50 MB.');
+    if ((f.size ?? 0) > MAX_MB * 1024 * 1024) return Alert.alert('File too large', `Maximum size is ${MAX_MB} MB.`);
     setFile(f);
-    if (!title) setTitle(f.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' '));
   };
 
   const submit = () => {
     if (!file) return Alert.alert('Choose a file first');
     if (!subjectId) return Alert.alert('Choose level, period and subject');
-    if (title.trim().length < 3) return Alert.alert('Add a clear title');
+    const n = number.trim() ? Number(number.trim()) : null;
+    if (n !== null && (!Number.isInteger(n) || n < 0 || n > 999)) return Alert.alert('Number must be between 0 and 999');
     upload.mutate(
-      { subjectId, title, docType: type, academicYear: type === 'summary' ? '' : year, file: { uri: file.uri, name: file.name, size: file.size, mimeType: file.mimeType }, driveUrl },
+      { subjectId, type, number: n, academicYear: year, file: { uri: file.uri, name: file.name, size: file.size, mimeType: file.mimeType } },
       {
-        onSuccess: () => {
-          Alert.alert('Published 🎉', 'Thanks for sharing with your promo!');
+        onSuccess: (doc) => {
+          if (doc.status === 'approved') Alert.alert('Published 🎉', 'Thanks for sharing with your promo!');
+          else Alert.alert('Sent for review', 'A moderator will check it soon. You will get a notification.');
           router.replace(`/documents/subject/${subjectId}`);
         },
       },
@@ -139,7 +136,7 @@ export default function Upload() {
                   Choose a file
                 </Txt>
                 <Txt size={12} color={colors.muted}>
-                  PDF, Word, PowerPoint or image · max 50 MB
+                  PDF, Word, PowerPoint, Excel or image · max 10 MB
                 </Txt>
               </View>
             </>
@@ -187,17 +184,14 @@ export default function Upload() {
           <ChipRow wrap options={TYPES} value={type} onChange={setType} />
         </View>
 
-        {type !== 'summary' ? (
-          <View style={{ gap: 10 }}>
-            <Txt size={13} weight={700}>
-              Academic year
-            </Txt>
-            <ChipRow wrap options={YEARS.map((y) => ({ value: y, label: y }))} value={year} onChange={setYear} activeColor={colors.violet} />
-          </View>
-        ) : null}
+        <View style={{ gap: 10 }}>
+          <Txt size={13} weight={700}>
+            Academic year
+          </Txt>
+          <ChipRow wrap options={YEARS.map((y) => ({ value: y, label: y }))} value={year} onChange={setYear} activeColor={colors.violet} />
+        </View>
 
-        <Field label="Title" placeholder="e.g. Examen Réseaux – Session principale" value={title} onChangeText={setTitle} />
-        <Field label="Google Drive link (optional)" placeholder="https://drive.google.com/…" autoCapitalize="none" value={driveUrl} onChangeText={setDriveUrl} />
+        <Field label="Number (optional)" placeholder="e.g. 3 for TD3" keyboardType="number-pad" value={number} onChangeText={setNumber} />
 
         {subject ? (
           <Row gap={10} style={{ backgroundColor: colors.tile, borderRadius: 16, padding: 12, alignItems: 'flex-start' }}>

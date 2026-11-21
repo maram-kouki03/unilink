@@ -30,3 +30,5 @@ services:
         sync: false
       - key: MAIL_RELAY_SECRET
         sync: false
+      - key: GOOGLE_API_KEY
+        sync: false

@@ -2,9 +2,15 @@ import React, { useState } from 'react';
 import { Alert, Linking, Share } from 'react-native';
 import { router } from 'expo-router';
 import { ActionSheet } from '@/components/cards';
-import { countDownload, recordOpen, reportDocument } from '@/api/documents';
+import { recordOpen, reportDocument } from '@/api/documents';
 import { downloadAndShare, saveOffline, signedDocUrl } from '@/lib/storage';
 import { DocumentRow } from '@/types/db';
+
+/** File name for a saved copy (Drive files have no extension when exported to PDF). */
+const fileNameOf = (d: DocumentRow) => {
+  const base = d.file_name || d.title;
+  return /\.[a-z0-9]{1,8}$/i.test(base) ? base : `${base}.${d.file_ext || 'pdf'}`;
+};
 
 /** Shared behaviour for file rows: open, download and the ⋮ menu (Drive, offline, share, report). */
 export function useFileActions() {
@@ -17,8 +23,8 @@ export function useFileActions() {
 
   const download = async (d: DocumentRow) => {
     try {
-      await downloadAndShare(d.id, d.file_name);
-      countDownload(d.id).catch(() => undefined);
+      // The server counts the download.
+      await downloadAndShare(d.id, fileNameOf(d));
     } catch (e) {
       Alert.alert('Download failed', e instanceof Error ? e.message : String(e));
     }
@@ -39,7 +45,7 @@ export function useFileActions() {
           icon: 'offline' as const,
           onPress: async () => {
             try {
-              await saveOffline(target.id, target.file_name);
+              await saveOffline(target.id, fileNameOf(target));
               Alert.alert('Saved', 'Available offline on this phone.');
             } catch (e) {
               Alert.alert('Could not save', e instanceof Error ? e.message : String(e));
@@ -65,8 +71,8 @@ export function useFileActions() {
                 text: 'Report',
                 style: 'destructive',
                 onPress: () =>
-                  reportDocument(target.id, 'Reported from app')
-                    .then(() => Alert.alert('Thanks', 'Admins will review it.'))
+                  reportDocument(target.id, 'other', 'Reported from app')
+                    .then(() => Alert.alert('Thanks', 'Moderators will review it.'))
                     .catch((e) => Alert.alert('Error', e.message)),
               },
             ]),

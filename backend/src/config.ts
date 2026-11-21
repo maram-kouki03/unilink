@@ -25,6 +25,8 @@ export const config = {
     apiKey: required('CLOUDINARY_API_KEY'),
     apiSecret: required('CLOUDINARY_API_SECRET'),
   },
+  // Google Drive API v3 key (read-only, public files). Optional: without it, Drive links are refused.
+  googleApiKey: process.env.GOOGLE_API_KEY?.trim() || null,
   // Google Apps Script mail relay. Optional in development (codes are then printed in the console).
   mail: {
     relayUrl: process.env.MAIL_RELAY_URL?.trim() || null,

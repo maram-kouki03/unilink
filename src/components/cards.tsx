@@ -123,7 +123,7 @@ export function FileRow({
   onMore?: () => void;
   last?: boolean;
 }) {
-  const meta = [doc.doc_type === 'summary' ? 'Résumé' : `${DOC_TYPE_LABEL[doc.doc_type]} ${doc.academic_year ?? ''}`.trim(), fileSize(doc.size_bytes)]
+  const meta = [`${DOC_TYPE_LABEL[doc.type]}${doc.number != null ? ` ${doc.number}` : ''} ${doc.academic_year ?? ''}`.trim(), fileSize(doc.size_bytes)]
     .filter(Boolean)
     .join(' · ');
   return (

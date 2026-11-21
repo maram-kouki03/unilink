@@ -7,7 +7,7 @@ type DeletableType = Exclude<TargetType, 'user'>;
 
 const DELETE_SQL: Record<DeletableType, string> = {
   document: `delete from public.documents where id = $1
-             returning file_path, storage_resource_type`,
+             returning cloudinary_public_id, storage_resource_type`,
   post: `delete from public.posts where id = $1 returning id`,
   comment: `delete from public.comments where id = $1 returning id, post_id`,
   item: `delete from public.items where id = $1 returning photo_path`,
@@ -35,8 +35,8 @@ export async function deleteContent(type: DeletableType, id: string, actorId: st
 
   await query(CLOSE_REPORTS_ON_TARGET, [type, id, 'resolved', 'delete_content', actorId]);
 
-  if (type === 'document' && row.storage_resource_type) {
-    await removeStored(row.file_path as string, row.storage_resource_type as ResourceType, 'authenticated');
+  if (type === 'document' && row.storage_resource_type && row.cloudinary_public_id) {
+    await removeStored(row.cloudinary_public_id as string, row.storage_resource_type as ResourceType, 'authenticated');
   }
   if ((type === 'item' || type === 'lost_found') && row.photo_path) {
     await removeImageUrl(row.photo_path as string);

@@ -3,7 +3,12 @@
  */
 
 export type LevelCode = '1A' | '2A' | '3A' | 'MASTERE' | 'DOCTORAT';
-export type DocType = 'exam' | 'course' | 'summary' | 'td_tp';
+export type DocType = 'course' | 'td' | 'tp' | 'exam' | 'correction' | 'other';
+export type DocStatus = 'pending' | 'approved' | 'rejected' | 'hidden';
+export type DocSource = 'upload' | 'drive_file' | 'drive_folder';
+export type ReportReason = 'wrong_file' | 'unreadable' | 'wrong_subject' | 'copyrighted' | 'duplicate' | 'other';
+export type RejectReason = 'duplicate' | 'unreadable' | 'wrong_subject' | 'copyrighted' | 'other';
+export type Role = 'student' | 'moderator' | 'admin';
 export type RideScope = 'between_cities' | 'within_city';
 export type ItemMode = 'rent' | 'borrow';
 export type LostKind = 'lost' | 'found';
@@ -18,7 +23,9 @@ export interface Profile {
   period: string | null;
   avatar_url: string | null;
   bio?: string | null;
-  role: 'student' | 'admin';
+  role: Role;
+  trusted?: boolean;
+  track_id?: string | null;
   last_seen_at: string | null;
   created_at: string;
 }
@@ -44,39 +51,77 @@ export interface Period extends FolderStats {
   name: string;
   label: string;
   months: string | null;
+  start_month?: number | null;
+  end_month?: number | null;
   sort: number;
   subjects: number;
+}
+
+export interface Track {
+  id: string;
+  level_id: number;
+  name: string;
+  code: string | null;
+  sort: number;
 }
 
 export interface Subject extends FolderStats {
   id: string;
   period_id: string;
   name: string;
+  code?: string | null;
   color: string | null;
+  track_id?: string | null;
+  track?: Pick<Track, 'id' | 'name' | 'code'> | null;
+  drive_folder_id?: string | null;
+  drive_synced_at?: string | null;
 }
 
 export interface DocumentRow {
   id: string;
   subject_id: string;
+  /** Auto-built ("TD3 – Réseaux – 2025/26"), editable by moderators. */
   title: string;
-  doc_type: DocType;
+  type: DocType;
+  number: number | null;
+  /** 'YYYY/YY', e.g. 2025/26 */
   academic_year: string | null;
-  file_path: string;
-  file_name: string;
+  source: DocSource;
+  status: DocStatus;
+  uploader_id: string | null;
+  file_name: string | null;
   file_ext: string;
   size_bytes: number | null;
+  mime_type: string | null;
+  drive_file_id: string | null;
   drive_url: string | null;
-  uploader_id: string;
-  downloads: number;
+  parent_folder_doc_id: string | null;
+  correction_of_id: string | null;
+  version: number;
+  replaced_by_id: string | null;
+  reject_reason: RejectReason | null;
+  reject_note: string | null;
+  reviewed_at: string | null;
+  hidden_reason: string | null;
+  open_count: number;
+  download_count: number;
+  useful_count: number;
+  report_count: number;
   created_at: string;
-  /** Set when hidden by moderation (only the uploader / admins still see it). */
-  hidden_at?: string | null;
-  uploader?: Pick<Profile, 'id' | 'full_name' | 'level'> | null;
+  updated_at: string;
+  /** Flags for the signed-in user. */
+  mine: boolean;
+  starred: boolean;
+  voted_useful: boolean;
+  uploader?: (Pick<Profile, 'id' | 'full_name' | 'level' | 'avatar_url'> & { trusted: boolean; role: Role }) | null;
   subject?: {
     id: string;
     name: string;
+    code: string | null;
     period: { id: string; name: string; level: { id: number; name: string; short_name: string } };
   } | null;
+  /** Folders only. */
+  children_count?: number;
 }
 
 export interface RideFeed {
@@ -262,17 +307,38 @@ export const LEVEL_SHORT: Record<LevelCode, string> = {
 
 export const LEVEL_CODES: LevelCode[] = ['1A', '2A', '3A', 'MASTERE', 'DOCTORAT'];
 
+export const DOC_TYPES: DocType[] = ['course', 'td', 'tp', 'exam', 'correction', 'other'];
+
 export const DOC_TYPE_LABEL: Record<DocType, string> = {
-  exam: 'Examen',
   course: 'Cours',
-  summary: 'Résumé',
-  td_tp: 'TD/TP',
+  td: 'TD',
+  tp: 'TP',
+  exam: 'Examen',
+  correction: 'Corrigé',
+  other: 'Autre',
 };
 
 export const DOC_FILTERS: { value: DocType | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
-  { value: 'exam', label: 'Exams' },
   { value: 'course', label: 'Courses' },
-  { value: 'summary', label: 'Summaries' },
-  { value: 'td_tp', label: 'TD/TP' },
+  { value: 'td', label: 'TD' },
+  { value: 'tp', label: 'TP' },
+  { value: 'exam', label: 'Exams' },
+  { value: 'correction', label: 'Corrections' },
+  { value: 'other', label: 'Other' },
 ];
+
+export const REPORT_REASON_LABEL: Record<ReportReason, string> = {
+  wrong_file: 'Wrong file',
+  unreadable: 'Unreadable',
+  wrong_subject: 'Wrong subject',
+  copyrighted: 'Copyrighted',
+  duplicate: 'Duplicate',
+  other: 'Other',
+};
+
+/** Current academic year 'YYYY/YY' (starts in September). */
+export function currentAcademicYear(now = new Date()) {
+  const y = now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1;
+  return `${y}/${String((y + 1) % 100).padStart(2, '0')}`;
+}

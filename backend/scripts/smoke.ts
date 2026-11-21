@@ -131,7 +131,7 @@ async function main() {
   await call('GET /documents/search', '/documents/search?q=math');
   await call('GET /documents/recent', '/documents/recent');
   await call('GET /documents/starred', '/documents/starred');
-  await call('GET /documents/mine', '/documents/mine');
+  await call('GET /me/contributions', '/me/contributions');
 
   /* ── lists ── */
   await call('GET /rides (between_cities)', '/rides?scope=between_cities');
@@ -210,16 +210,18 @@ async function main() {
   /* ── document (PDF → Cloudinary): upload → read → star → open → link → delete ── */
   if (subjectId) {
     const docForm = new FormData();
-    docForm.append('file', tinyPdf(), 'smoke-test.pdf');
-    docForm.append('subjectId', subjectId);
-    docForm.append('title', 'Smoke test document');
-    docForm.append('docType', 'summary');
+    // Unique bytes: an identical file would be refused as a duplicate (409).
+    const pdfText = (await tinyPdf().text()).replace('%%EOF', `% smoke ${Date.now()}
+%%EOF`);
+    docForm.append('file', new Blob([pdfText], { type: 'application/pdf' }), 'smoke-test.pdf');
+    docForm.append('subject_id', subjectId);
+    docForm.append('type', 'other');
     const doc = await call<{ id: string }>('POST /documents (pdf)', '/documents', { form: docForm, timeoutMs: 120_000 });
     if (doc) {
       await call('GET /documents/:id', `/documents/${doc.id}`);
       await call('POST /documents/:id/star', `/documents/${doc.id}/star`, { method: 'POST' });
       await call('POST /documents/:id/open', `/documents/${doc.id}/open`, { method: 'POST' });
-      await call('POST /documents/:id/download', `/documents/${doc.id}/download`, { method: 'POST' });
+      await call('GET /documents/:id/download', `/documents/${doc.id}/download`);
       await call('GET /documents/:id/link', `/documents/${doc.id}/link`);
       await call('GET /documents/:id/link?download=1', `/documents/${doc.id}/link?download=1`);
       await call('DELETE /documents/:id', `/documents/${doc.id}`, { method: 'DELETE' });

@@ -77,7 +77,7 @@ export const PROFILE_AVATAR = `select avatar_url from public.profiles where id =
 
 export const PROFILE_STATS = `
   select
-    (select count(*)::int from public.documents where uploader_id = $1) as uploads,
+    (select count(*)::int from public.documents where uploader_id = $1 and parent_folder_doc_id is null) as uploads,
     (select count(*)::int from public.rides     where driver_id   = $1) as rides,
     (select count(*)::int from public.posts     where author_id   = $1) as posts,
     (select count(*)::int from public.items     where owner_id    = $1) as items,
@@ -88,8 +88,9 @@ export const PROFILE_STATS = `
 
 /** Cloudinary files of a user, removed after the account is deleted. */
 export const USER_FILES = `
-  select 'document' as kind, d.file_path as ref, d.storage_resource_type as resource_type
-    from public.documents d where d.uploader_id = $1 and d.storage_resource_type is not null
+  select 'document' as kind, d.cloudinary_public_id as ref, d.storage_resource_type as resource_type
+    from public.documents d
+   where d.uploader_id = $1 and d.storage_resource_type is not null and d.cloudinary_public_id is not null
   union all
   select 'image', i.photo_path, 'image' from public.items i where i.owner_id = $1 and i.photo_path is not null
   union all

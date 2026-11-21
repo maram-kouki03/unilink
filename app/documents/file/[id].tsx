@@ -51,7 +51,7 @@ export default function FilePreview() {
       <View style={{ gap: 14, flex: 1 }}>
         <Header
           title={d.title}
-          subtitle={`${d.file_ext.toUpperCase()} · ${DOC_TYPE_LABEL[d.doc_type]}${d.academic_year ? ` ${d.academic_year}` : ''} · ${fileSize(d.size_bytes)}`}
+          subtitle={`${d.file_ext.toUpperCase()} · ${DOC_TYPE_LABEL[d.type]}${d.academic_year ? ` ${d.academic_year}` : ''} · ${fileSize(d.size_bytes)}`}
           right={
             <Row gap={8}>
               <IconButton icon="star" label={d.starred ? 'Unstar' : 'Star'} color={d.starred ? colors.violet : colors.iconMuted} onPress={() => star.mutate({ id: d.id, starred: d.starred })} />
@@ -86,7 +86,7 @@ export default function FilePreview() {
           </View>
           <View style={{ alignItems: 'flex-end' }}>
             <Txt size={14} weight={800} color={colors.royal}>
-              {d.downloads}
+              {d.download_count}
             </Txt>
             <Txt size={11} color={colors.muted}>
               downloads

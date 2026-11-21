@@ -27,10 +27,16 @@ const TABLE_OF: Record<Exclude<TargetType, 'user'>, string> = {
   ride: 'rides',
 };
 
+/** Documents use status/hidden_reason instead of hidden_at. */
 export const hideSql = (t: Exclude<TargetType, 'user'>) =>
-  `update public.${TABLE_OF[t]} set hidden_at = coalesce(hidden_at, now()) where id = $1`;
+  t === 'document'
+    ? `update public.documents set status = 'hidden', hidden_reason = 'moderator', updated_at = now() where id = $1 and status = 'approved'`
+    : `update public.${TABLE_OF[t]} set hidden_at = coalesce(hidden_at, now()) where id = $1`;
 
-export const unhideSql = (t: Exclude<TargetType, 'user'>) => `update public.${TABLE_OF[t]} set hidden_at = null where id = $1`;
+export const unhideSql = (t: Exclude<TargetType, 'user'>) =>
+  t === 'document'
+    ? `update public.documents set status = 'approved', hidden_reason = null, updated_at = now() where id = $1 and status = 'hidden'`
+    : `update public.${TABLE_OF[t]} set hidden_at = null where id = $1`;
 
 /** $1 reporter, $2 type, $3 target, $4 reason. Nothing happens if this person already has an open report on it. */
 export const INSERT_REPORT = `
@@ -57,7 +63,8 @@ export const LIST_REPORTS = `
     from public.reports r
     left join public.profiles rp on rp.id = r.reporter_id
     left join lateral (
-      select d.title as preview, d.uploader_id as owner_id, d.hidden_at
+      select d.title as preview, d.uploader_id as owner_id,
+             case when d.status = 'hidden' then d.updated_at end as hidden_at
         from public.documents d where r.target_type = 'document' and d.id = r.target_id
       union all
       select left(p.body, 200), p.author_id, p.hidden_at
