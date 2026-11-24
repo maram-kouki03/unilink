@@ -1,6 +1,6 @@
 # Unilink · Connect • Share • Belong
 
-This is The SUP'COM student app: a Drive-style document library, carpooling, rents & borrow, lost & found, campus map, events, discussions and direct messages, all behind a `@supcom.tn` login.
+This is The SUP'COM student app: a Drive-style document library, carpooling, rents & borrow, lost & found, events, discussions and direct messages, all behind a `@supcom.tn` login.
 
 **Stack:** Expo (React Native, SDK 58) + Expo Router + TypeScript · TanStack Query · **own backend** in `backend/` (Node.js + Express 5 + TypeScript, raw SQL with `pg`, JWT auth, Multer file storage, Socket.io live updates) · **Supabase used only as the PostgreSQL database** · react-native-svg for the illustrations from the design board.
 
@@ -110,7 +110,6 @@ app/                              ← screens (Expo Router: one file = one route
   rides/ index · [id] · offer · mine
   rents/ index · [id] · new
   lost-found/ index · report
-  map                             isometric campus map + Directions
   events/ index · [id]            register, add to Google Calendar
   discussions/ [id] · new         threads with live replies, best answer
   chat/ index · [id]              direct messages (Contact owner / driver)
@@ -120,7 +119,6 @@ src/
   components/ui                   Button, Field, Chip, SegmentedTabs, Header, Screen…
   components/cards.tsx            FolderCard, FileRow, RideCard, ItemCard, EventCard, PostCard
   components/Illustrations.tsx    logo, campus building, items, events (SVG)
-  components/CampusMapArt.tsx     tappable isometric map, edit data/campus.ts
   api/                            TanStack Query hooks calling the backend
   lib/api.ts                      fetch wrapper (EXPO_PUBLIC_API_URL, JWT in SecureStore, errors, 401 → logout)
   lib/socket.ts                   the single Socket.io connection (rooms, re-join on reconnect)
@@ -157,4 +155,4 @@ Files are stored by the backend on disk: `backend/uploads/documents` (private, 5
 - **Push notifications:** add `expo-notifications`, store the Expo push token on `profiles`, and send pushes from `backend/src/notify.ts`.
 - **Password reset:** today students write to unilink@supcom.tn; add an e-mail reset flow in the backend later.
 - **Admin panel:** a small web page to create subjects, publish events and review `document_reports`.
-- **Real subject list:** edit `supabase/seed.sql` (and `src/data/campus.ts` for building names and coordinates) to match the official programme and campus.
+- **Real subject list:** edit `supabase/seed.sql` (and `src/data/places.ts` for campus place names and coordinates) to match the official programme and campus.

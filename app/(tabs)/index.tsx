@@ -18,7 +18,6 @@ const QUICK: { label: string; icon: IconName; href: string }[] = [
   { label: 'Rents', icon: 'key', href: '/rents?mode=rent' },
   { label: 'Borrow', icon: 'box', href: '/rents?mode=borrow' },
   { label: 'Lost & Found', icon: 'search', href: '/lost-found' },
-  { label: 'Campus Map', icon: 'pin', href: '/map' },
   { label: 'Events', icon: 'calendar', href: '/events' },
   { label: 'Discussions', icon: 'chat', href: '/discussions' },
 ];
@@ -101,7 +100,7 @@ export default function Home() {
 
 const styles = StyleSheet.create({
   hero: { height: 160, borderRadius: 22, padding: 20, justifyContent: 'space-between', overflow: 'hidden' },
-  grid: { backgroundColor: colors.card, borderRadius: 20, paddingVertical: 16, paddingHorizontal: 4, flexDirection: 'row', flexWrap: 'wrap', rowGap: 16 },
+  grid: { backgroundColor: colors.card, borderRadius: 20, paddingVertical: 16, paddingHorizontal: 4, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', rowGap: 16 },
   quick: { width: '25%', alignItems: 'center', gap: 8 },
   tile: { width: 52, height: 52, borderRadius: 16, backgroundColor: colors.tile, alignItems: 'center', justifyContent: 'center' },
 });

@@ -4,11 +4,11 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { PhotoPicker } from '@/components/PhotoPicker';
 import { Button, ChipRow, ErrorNote, Field, Header, Screen, SegmentedTabs, Txt } from '@/components/ui';
 import { useReportLostFound } from '@/api/marketplace';
-import { CAMPUS_PLACES } from '@/data/campus';
+import { CAMPUS_PLACE_NAMES } from '@/data/places';
 import { LostKind } from '@/types/db';
 
 const CATEGORIES = ['Electronics', 'Cards & IDs', 'Keys', 'Clothing', 'Books', 'Other'];
-const PLACES = [...CAMPUS_PLACES.map((p) => p.name.split(' – ')[0]), 'Parking', 'Other'];
+const PLACES = [...CAMPUS_PLACE_NAMES, 'Parking', 'Other'];
 
 export default function ReportItem() {
   const params = useLocalSearchParams<{ kind?: LostKind }>();

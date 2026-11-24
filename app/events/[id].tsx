@@ -86,7 +86,6 @@ export default function EventDetail() {
               SUP'COM · El Ghazala
             </Txt>
           </View>
-          <Button title="Map" variant="ghost" small onPress={() => router.push('/map')} />
         </Row>
         {e.description ? (
           <View style={{ gap: 6 }}>

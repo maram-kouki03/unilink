@@ -9,7 +9,7 @@ import { Icon } from '@/components/Icon';
 import { useBookRide, useCancelBooking, useCancelRide, useRide } from '@/api/rides';
 import { startConversation } from '@/api/social';
 import { useAuth } from '@/providers/AuthProvider';
-import { SUPCOM_COORDS } from '@/data/campus';
+import { SUPCOM_COORDS } from '@/data/places';
 import { dayLabel, hhmm } from '@/lib/format';
 import { colors, shadows } from '@/theme';
 import { LEVEL_LABEL } from '@/types/db';
